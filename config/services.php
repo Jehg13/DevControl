@@ -31,4 +31,8 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'github' => [
+        'ca_bundle' => env('GITHUB_CA_BUNDLE'),
+    ],
+
 ];

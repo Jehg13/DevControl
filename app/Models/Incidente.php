@@ -2,26 +2,23 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class Actualizacion extends Model
+class Incidente extends Model
 {
-    use HasFactory;
-
-    protected $table = 'actualizaciones';
+    protected $table = 'incidentes';
 
     protected $fillable = [
         'proyecto_id',
         'titulo',
-        'detalles',
-        'detalle',
-        'commit',
-        'fecha',
+        'descripcion',
+        'prioridad',
+        'estado',
+        'fecha_detectado',
     ];
 
     protected $casts = [
-        'fecha' => 'date',
+        'fecha_detectado' => 'date',
     ];
 
     public function proyecto()

@@ -3,7 +3,6 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Tarea extends Model
 {
@@ -11,6 +10,9 @@ class Tarea extends Model
 
     protected $fillable = [
         'proyecto_id',
+        'usuario_id',
+        'seccion_id',
+        'funcionalidad_id',
         'titulo',
         'descripcion',
         'prioridad',
@@ -32,5 +34,20 @@ class Tarea extends Model
     public function proyecto()
     {
         return $this->belongsTo(Proyecto::class, 'proyecto_id');
+    }
+
+    public function usuario()
+    {
+        return $this->belongsTo(User::class, 'usuario_id');
+    }
+
+    public function seccion()
+    {
+        return $this->belongsTo(Seccion::class, 'seccion_id');
+    }
+
+    public function funcionalidad()
+    {
+        return $this->belongsTo(Funcionalidad::class, 'funcionalidad_id');
     }
 }

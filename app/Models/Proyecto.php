@@ -14,6 +14,11 @@ class Proyecto extends Model
     protected $fillable = [
         'nombre',
         'descripcion',
+        'contexto',
+        'objetivo',
+        'tecnologias',
+        'reglas',
+        'repositorio_url',
         'fecha_inicio',
         'fecha_meta',
         'estado',
@@ -22,8 +27,8 @@ class Proyecto extends Model
 
     protected $casts = [
         'fecha_inicio' => 'date',
-        'fecha_meta'   => 'date',
-        'progreso'     => 'integer',
+        'fecha_meta' => 'date',
+        'progreso' => 'integer',
     ];
 
     /*
@@ -42,8 +47,23 @@ class Proyecto extends Model
         return $this->hasMany(Bug::class, 'proyecto_id');
     }
 
+    public function incidentes()
+    {
+        return $this->hasMany(Incidente::class, 'proyecto_id');
+    }
+
     public function actualizaciones()
     {
         return $this->hasMany(Actualizacion::class, 'proyecto_id');
+    }
+
+    public function secciones()
+    {
+        return $this->hasMany(Seccion::class)->orderBy('orden');
+    }
+
+    public function integracionGithub()
+    {
+        return $this->hasOne(Integracion::class)->where('proveedor', 'github');
     }
 }

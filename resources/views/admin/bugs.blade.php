@@ -198,10 +198,11 @@
 
             {{-- NAVEGACIÓN --}}
 
+            @include('admin.partials.menu-principal')
             <nav class="space-y-1">
 
                 <a
-                    href="#"
+                    href="{{ route('dashboard') }}"
                     class="flex items-center gap-3 rounded-lg
                            px-3.5 py-2.5 text-sm font-semibold
                            text-gray-400 transition
@@ -229,7 +230,7 @@
 
 
                 <a
-                    href="#"
+                    href="{{ route('proyectos.index') }}"
                     class="flex items-center gap-3 rounded-lg
                            px-3.5 py-2.5 text-sm font-semibold
                            text-gray-400 transition
@@ -254,7 +255,7 @@
 
 
                 <a
-                    href="#"
+                    href="{{ route('tareas.index') }}"
                     class="flex items-center gap-3 rounded-lg
                            px-3.5 py-2.5 text-sm font-semibold
                            text-gray-400 transition
@@ -307,7 +308,7 @@
 
 
                 <a
-                    href="#"
+                    href="{{ route('actualizaciones') }}"
                     class="flex items-center gap-3 rounded-lg
                            px-3.5 py-2.5 text-sm font-semibold
                            text-gray-400 transition
@@ -335,7 +336,7 @@
 
 
                 <a
-                    href="#"
+                    href="{{ route('archivos') }}"
                     class="flex items-center gap-3 rounded-lg
                            px-3.5 py-2.5 text-sm font-semibold
                            text-gray-400 transition
@@ -359,6 +360,7 @@
 
                 </a>
 
+                @include('admin.partials.navegacion-modulos')
             </nav>
 
 
@@ -1688,6 +1690,7 @@
 
     </script>
 
+@include('admin.partials.asistente-flotante')
 </body>
 
 </html>

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Proyecto;
 use App\Models\Tarea;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class TareasController extends Controller
 {
@@ -13,15 +14,16 @@ class TareasController extends Controller
      */
     public function index()
     {
-        $tareas = Tarea::with('proyecto')
+        $tareas = Tarea::with(['proyecto', 'seccion', 'funcionalidad'])
             ->latest()
             ->get();
 
-        $proyectos = Proyecto::orderBy('nombre')->get();
+        $proyectos = Proyecto::with('secciones.funcionalidades')
+            ->orderBy('nombre')
+            ->get();
 
         return view('admin.tareas', compact('tareas', 'proyectos'));
     }
-
 
     /**
      * Mostrar formulario para crear una tarea.
@@ -30,15 +32,14 @@ class TareasController extends Controller
      */
     public function create()
     {
-        $tareas = Tarea::with('proyecto')
+        $tareas = Tarea::with(['proyecto', 'seccion', 'funcionalidad'])
             ->latest()
             ->get();
 
-        $proyectos = Proyecto::orderBy('nombre')->get();
+        $proyectos = Proyecto::with('secciones.funcionalidades')->orderBy('nombre')->get();
 
         return view('admin.tareas', compact('tareas', 'proyectos'));
     }
-
 
     /**
      * Guardar una nueva tarea.
@@ -48,42 +49,49 @@ class TareasController extends Controller
         $validado = $request->validate([
             'proyecto_id' => [
                 'required',
-                'exists:proyectos,id'
+                'exists:proyectos,id',
+            ],
+            'seccion_id' => [
+                'nullable',
+                Rule::exists('secciones', 'id')->where('proyecto_id', $request->input('proyecto_id')),
+            ],
+            'funcionalidad_id' => [
+                'nullable',
+                Rule::exists('funcionalidades', 'id')->where('seccion_id', $request->input('seccion_id')),
             ],
 
             'titulo' => [
                 'required',
                 'string',
-                'max:255'
+                'max:255',
             ],
 
             'descripcion' => [
                 'nullable',
-                'string'
+                'string',
             ],
 
             'prioridad' => [
                 'required',
-                'in:Alta,Media,Baja'
+                'in:Alta,Media,Baja',
             ],
 
             'estado' => [
                 'required',
-                'in:Pendiente,En progreso,En revisión,Completado,Cancelado'
+                'in:Pendiente,En progreso,En revisión,Completado,Cancelado',
             ],
 
             'fecha_inicio' => [
                 'nullable',
-                'date'
+                'date',
             ],
 
             'fecha_limite' => [
                 'nullable',
                 'date',
-                'after_or_equal:fecha_inicio'
+                'after_or_equal:fecha_inicio',
             ],
         ]);
-
 
         // Si se crea directamente como completada
         // y no tiene fecha completada, ponemos la fecha actual.
@@ -95,15 +103,12 @@ class TareasController extends Controller
             $validado['fecha_completada'] = null;
         }
 
-
         Tarea::create($validado);
-
 
         return redirect()
             ->route('tareas.index')
             ->with('success', 'Tarea creada correctamente.');
     }
-
 
     /**
      * Mostrar una tarea específica.
@@ -112,20 +117,19 @@ class TareasController extends Controller
      */
     public function show(Tarea $tarea)
     {
-        $tareas = Tarea::with('proyecto')
+        $tareas = Tarea::with(['proyecto', 'seccion', 'funcionalidad'])
             ->latest()
             ->get();
 
-        $proyectos = Proyecto::orderBy('nombre')->get();
+        $proyectos = Proyecto::with('secciones.funcionalidades')->orderBy('nombre')->get();
 
-        $tarea->load('proyecto');
+        $tarea->load(['proyecto', 'seccion', 'funcionalidad']);
 
         return view(
             'admin.tareas',
             compact('tareas', 'proyectos', 'tarea')
         );
     }
-
 
     /**
      * Mostrar formulario para editar una tarea.
@@ -134,20 +138,19 @@ class TareasController extends Controller
      */
     public function edit(Tarea $tarea)
     {
-        $tareas = Tarea::with('proyecto')
+        $tareas = Tarea::with(['proyecto', 'seccion', 'funcionalidad'])
             ->latest()
             ->get();
 
-        $proyectos = Proyecto::orderBy('nombre')->get();
+        $proyectos = Proyecto::with('secciones.funcionalidades')->orderBy('nombre')->get();
 
-        $tarea->load('proyecto');
+        $tarea->load(['proyecto', 'seccion', 'funcionalidad']);
 
         return view(
             'admin.tareas',
             compact('tareas', 'proyectos', 'tarea')
         );
     }
-
 
     /**
      * Actualizar una tarea.
@@ -157,47 +160,54 @@ class TareasController extends Controller
         $validado = $request->validate([
             'proyecto_id' => [
                 'required',
-                'exists:proyectos,id'
+                'exists:proyectos,id',
+            ],
+            'seccion_id' => [
+                'nullable',
+                Rule::exists('secciones', 'id')->where('proyecto_id', $request->input('proyecto_id')),
+            ],
+            'funcionalidad_id' => [
+                'nullable',
+                Rule::exists('funcionalidades', 'id')->where('seccion_id', $request->input('seccion_id')),
             ],
 
             'titulo' => [
                 'required',
                 'string',
-                'max:255'
+                'max:255',
             ],
 
             'descripcion' => [
                 'nullable',
-                'string'
+                'string',
             ],
 
             'prioridad' => [
                 'required',
-                'in:Alta,Media,Baja'
+                'in:Alta,Media,Baja',
             ],
 
             'estado' => [
                 'required',
-                'in:Pendiente,En progreso,En revisión,Completado,Cancelado'
+                'in:Pendiente,En progreso,En revisión,Completado,Cancelado',
             ],
 
             'fecha_inicio' => [
                 'nullable',
-                'date'
+                'date',
             ],
 
             'fecha_limite' => [
                 'nullable',
                 'date',
-                'after_or_equal:fecha_inicio'
+                'after_or_equal:fecha_inicio',
             ],
 
             'fecha_completada' => [
                 'nullable',
-                'date'
+                'date',
             ],
         ]);
-
 
         /*
         |--------------------------------------------------------------------------
@@ -212,7 +222,6 @@ class TareasController extends Controller
             $validado['fecha_completada'] = now()->toDateString();
         }
 
-
         /*
         |--------------------------------------------------------------------------
         | SI DEJA DE ESTAR COMPLETADA
@@ -223,15 +232,12 @@ class TareasController extends Controller
             $validado['fecha_completada'] = null;
         }
 
-
         $tarea->update($validado);
-
 
         return redirect()
             ->route('tareas.index')
             ->with('success', 'Tarea actualizada correctamente.');
     }
-
 
     /**
      * Eliminar una tarea.

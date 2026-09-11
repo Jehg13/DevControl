@@ -55,6 +55,7 @@
             </div>
 
             {{-- Navegación --}}
+            @include('admin.partials.menu-principal')
             <nav class="space-y-1">
 
                 <a href="{{ route('dashboard') }}"
@@ -68,7 +69,15 @@
                     Dashboard
                 </a>
 
-                <a href="#"
+                <a href="{{ route('asistente.index') }}"
+                   class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
+                    <span class="flex h-5 w-5 items-center justify-center rounded border border-[#d61f2c]/60 font-mono2 text-[10px] text-[#ff5b5b]">&gt;_</span>
+                    Asistente IA
+                </a>
+
+                @include('admin.partials.navegacion-modulos')
+
+                <a                 href="{{ route('dashboard') }}"
                    class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
@@ -76,7 +85,7 @@
                     Proyectos
                 </a>
 
-                <a href="#"
+                <a                 href="{{ route('proyectos.index') }}"
                    class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="4" y="4" width="16" height="16" rx="2"/>
@@ -85,7 +94,7 @@
                     Tareas
                 </a>
 
-                <a href="#"
+                <a                 href="{{ route('bugs.index') }}"
                    class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="8" y="7" width="8" height="11" rx="4"/>
@@ -94,7 +103,7 @@
                     Bugs
                 </a>
 
-                <a href="#"
+                <a                 href="{{ route('actualizaciones') }}"
                    class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="6" cy="12" r="2.3"/>
@@ -105,7 +114,7 @@
                     Actualizaciones
                 </a>
 
-                <a href="#"
+                <a                 href="{{ route('archivos') }}"
                    class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M4 7l4-3h5l4 3h3v13a1 1 0 01-1 1H4a1 1 0 01-1-1V7z"/>
@@ -485,5 +494,6 @@
         }
     </script>
 
+@include('admin.partials.asistente-flotante')
 </body>
 </html>

@@ -2,9 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Actualizacion;
 use App\Models\Proyecto;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 
 class ProyectoController extends Controller
 {
@@ -30,11 +36,15 @@ class ProyectoController extends Controller
         */
 
         if ($proyecto) {
-            $proyecto->load([
-                'tareas',
-                'bugs',
-                'actualizaciones',
-            ]);
+            $relaciones = ['secciones', 'integracionGithub'];
+
+            foreach (['tareas', 'bugs', 'actualizaciones'] as $relacion) {
+                if (Schema::hasTable($this->tablaRelacionada($relacion))) {
+                    $relaciones[] = $relacion;
+                }
+            }
+
+            $proyecto->load($relaciones);
         }
 
         /*
@@ -45,17 +55,25 @@ class ProyectoController extends Controller
 
         $usuario = $this->obtenerUsuario();
 
-        $tareas = $proyecto
+        $tareas = $proyecto && Schema::hasTable('tareas')
             ? $proyecto->tareas
             : collect();
 
-        $bugs = $proyecto
+        $bugs = $proyecto && Schema::hasTable('bugs')
             ? $proyecto->bugs
             : collect();
 
-        $actualizaciones = $proyecto
+        $actualizaciones = $proyecto && Schema::hasTable('actualizaciones')
             ? $proyecto->actualizaciones
             : collect();
+
+        $secciones = $proyecto
+            ? $proyecto->secciones
+            : collect();
+
+        $integracionGithub = $proyecto
+            ? $proyecto->integracionGithub
+            : null;
 
         /*
         |--------------------------------------------------------------------------
@@ -101,11 +119,12 @@ class ProyectoController extends Controller
             'tareas',
             'bugs',
             'actualizaciones',
+            'secciones',
+            'integracionGithub',
             'archivos',
             'notas'
         ));
     }
-
 
     /**
      * Mostrar un proyecto específico.
@@ -119,10 +138,19 @@ class ProyectoController extends Controller
         */
 
         $proyecto->load([
-            'tareas',
-            'bugs',
-            'actualizaciones',
+            'secciones.funcionalidades',
+            'integracionGithub',
         ]);
+
+        foreach ([
+            'tareas' => 'tareas',
+            'bugs' => 'bugs',
+            'actualizaciones' => 'actualizaciones',
+        ] as $relacion => $tabla) {
+            if (Schema::hasTable($tabla)) {
+                $proyecto->load($relacion);
+            }
+        }
 
         /*
         |--------------------------------------------------------------------------
@@ -140,11 +168,21 @@ class ProyectoController extends Controller
 
         $usuario = $this->obtenerUsuario();
 
-        $tareas = $proyecto->tareas;
+        $tareas = Schema::hasTable('tareas')
+            ? $proyecto->tareas
+            : collect();
 
-        $bugs = $proyecto->bugs;
+        $bugs = Schema::hasTable('bugs')
+            ? $proyecto->bugs
+            : collect();
 
-        $actualizaciones = $proyecto->actualizaciones;
+        $actualizaciones = Schema::hasTable('actualizaciones')
+            ? $proyecto->actualizaciones
+            : collect();
+
+        $secciones = $proyecto->secciones;
+
+        $integracionGithub = $proyecto->integracionGithub;
 
         /*
         |--------------------------------------------------------------------------
@@ -181,11 +219,11 @@ class ProyectoController extends Controller
             'tareas',
             'bugs',
             'actualizaciones',
+            'secciones',
             'archivos',
             'notas'
         ));
     }
-
 
     /**
      * Crear proyecto.
@@ -202,6 +240,21 @@ class ProyectoController extends Controller
             'descripcion' => [
                 'nullable',
                 'string',
+            ],
+            'contexto' => ['nullable', 'string'],
+            'objetivo' => ['nullable', 'string'],
+            'tecnologias' => ['nullable', 'string'],
+            'reglas' => ['nullable', 'string'],
+            'repositorio_url' => ['nullable', 'url', 'max:500'],
+            'secciones' => ['nullable', 'array'],
+            'secciones.*.nombre' => ['required', 'string', 'max:150'],
+            'secciones.*.descripcion' => ['nullable', 'string'],
+            'secciones.*.funcionalidades' => ['nullable', 'array'],
+            'secciones.*.funcionalidades.*.nombre' => ['required', 'string', 'max:180'],
+            'secciones.*.funcionalidades.*.descripcion' => ['nullable', 'string'],
+            'secciones.*.funcionalidades.*.estado' => [
+                'required',
+                'in:Pendiente,En desarrollo,Parcial,Implementada,Desconocida,Requiere revisión',
             ],
 
             'fecha_inicio' => [
@@ -242,7 +295,14 @@ class ProyectoController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        Proyecto::create($validado);
+        $secciones = $validado['secciones'] ?? [];
+        unset($validado['secciones']);
+
+        DB::transaction(function () use ($validado, $secciones) {
+            $proyecto = Proyecto::create($validado);
+            $this->guardarSecciones($proyecto, $secciones);
+            $this->guardarIntegracionGithub($proyecto);
+        });
 
         /*
         |--------------------------------------------------------------------------
@@ -257,7 +317,6 @@ class ProyectoController extends Controller
                 'Proyecto creado correctamente.'
             );
     }
-
 
     /**
      * Actualizar proyecto.
@@ -276,6 +335,21 @@ class ProyectoController extends Controller
             'descripcion' => [
                 'nullable',
                 'string',
+            ],
+            'contexto' => ['nullable', 'string'],
+            'objetivo' => ['nullable', 'string'],
+            'tecnologias' => ['nullable', 'string'],
+            'reglas' => ['nullable', 'string'],
+            'repositorio_url' => ['nullable', 'url', 'max:500'],
+            'secciones' => ['nullable', 'array'],
+            'secciones.*.nombre' => ['required', 'string', 'max:150'],
+            'secciones.*.descripcion' => ['nullable', 'string'],
+            'secciones.*.funcionalidades' => ['nullable', 'array'],
+            'secciones.*.funcionalidades.*.nombre' => ['required', 'string', 'max:180'],
+            'secciones.*.funcionalidades.*.descripcion' => ['nullable', 'string'],
+            'secciones.*.funcionalidades.*.estado' => [
+                'required',
+                'in:Pendiente,En desarrollo,Parcial,Implementada,Desconocida,Requiere revisión',
             ],
 
             'fecha_inicio' => [
@@ -322,7 +396,15 @@ class ProyectoController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $proyecto->update($validado);
+        $secciones = $validado['secciones'] ?? [];
+        unset($validado['secciones']);
+
+        DB::transaction(function () use ($proyecto, $validado, $secciones) {
+            $proyecto->update($validado);
+            $proyecto->secciones()->delete();
+            $this->guardarSecciones($proyecto, $secciones);
+            $this->guardarIntegracionGithub($proyecto);
+        });
 
         /*
         |--------------------------------------------------------------------------
@@ -341,6 +423,187 @@ class ProyectoController extends Controller
             );
     }
 
+    private function guardarSecciones(Proyecto $proyecto, array $secciones): void
+    {
+        foreach ($secciones as $seccionIndex => $seccionData) {
+            $seccion = $proyecto->secciones()->create([
+                'nombre' => $seccionData['nombre'],
+                'descripcion' => $seccionData['descripcion'] ?? null,
+                'orden' => $seccionIndex,
+            ]);
+
+            foreach ($seccionData['funcionalidades'] ?? [] as $funcionalidadIndex => $funcionalidadData) {
+                $seccion->funcionalidades()->create([
+                    'nombre' => $funcionalidadData['nombre'],
+                    'descripcion' => $funcionalidadData['descripcion'] ?? null,
+                    'estado' => $funcionalidadData['estado'],
+                    'orden' => $funcionalidadIndex,
+                ]);
+            }
+        }
+    }
+
+    private function tablaRelacionada(string $relacion): string
+    {
+        return [
+            'tareas' => 'tareas',
+            'bugs' => 'bugs',
+            'actualizaciones' => 'actualizaciones',
+        ][$relacion];
+    }
+
+    public function sincronizarGithub(Proyecto $proyecto)
+    {
+        $integracion = $proyecto->integracionGithub;
+
+        if (! $integracion) {
+            return back()->with('error', 'Este proyecto no tiene un repositorio de GitHub configurado.');
+        }
+
+        $partes = $this->partesRepositorioGithub($integracion->repositorio_url);
+
+        if (! $partes) {
+            $integracion->update([
+                'estado' => 'error',
+                'ultimo_intento' => now(),
+                'ultimo_error' => 'La URL debe tener el formato https://github.com/usuario/repositorio.',
+            ]);
+
+            return back()->with('error', 'La URL del repositorio de GitHub no es válida.');
+        }
+
+        $integracion->update([
+            'estado' => 'sincronizando',
+            'ultimo_intento' => now(),
+            'ultimo_error' => null,
+        ]);
+
+        try {
+            $clienteGithub = Http::acceptJson()
+                ->withOptions([
+                    'verify' => config('services.github.ca_bundle') ?: true,
+                ])
+                ->timeout(10);
+
+            $repositorio = $clienteGithub
+                ->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}")
+                ->throw()
+                ->json();
+
+            $commit = $clienteGithub
+                ->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/commits", [
+                    'sha' => $repositorio['default_branch'] ?? 'main',
+                    'per_page' => 1,
+                ])
+                ->throw()
+                ->json()[0] ?? null;
+
+            $integracion->update([
+                'repositorio_propietario' => $repositorio['owner']['login'] ?? $partes['owner'],
+                'repositorio_nombre' => $repositorio['name'] ?? $partes['repo'],
+                'rama_principal' => $repositorio['default_branch'] ?? 'main',
+                'estado' => 'sincronizado',
+                'ultima_sincronizacion' => now(),
+                'ultimo_commit_sha' => $commit['sha'] ?? null,
+                'ultimo_commit_mensaje' => $commit['commit']['message'] ?? null,
+                'ultimo_error' => null,
+            ]);
+
+            Actualizacion::create([
+                'proyecto_id' => $proyecto->id,
+                'titulo' => 'Repositorio sincronizado',
+                'detalles' => 'DevControl sincronizó el repositorio '
+                    .$integracion->repositorio_propietario.'/'
+                    .$integracion->repositorio_nombre.'.',
+                'commit' => $commit['sha'] ?? null,
+            ]);
+        } catch (ConnectionException $exception) {
+            $integracion->update([
+                'estado' => 'error',
+                'ultimo_error' => 'No se pudo verificar el certificado SSL de PHP. '
+                    .'Configura GITHUB_CA_BUNDLE con la ruta a cacert.pem.',
+            ]);
+
+            return back()->with(
+                'error',
+                'PHP no pudo verificar el certificado SSL de GitHub. Configura el CA bundle.'
+            );
+        } catch (RequestException $exception) {
+            $integracion->update([
+                'estado' => 'error',
+                'ultimo_error' => $exception->response?->json('message') ?? 'GitHub rechazó la solicitud.',
+            ]);
+
+            return back()->with('error', 'No se pudo sincronizar el repositorio con GitHub.');
+        }
+
+        return back()->with('success', 'Repositorio sincronizado correctamente.');
+    }
+
+    public function configurarGithubManual(Proyecto $proyecto)
+    {
+        $integracion = $proyecto->integracionGithub;
+
+        if (! $integracion) {
+            return back()->with('error', 'Este proyecto no tiene un repositorio de GitHub configurado.');
+        }
+
+        $partes = $this->partesRepositorioGithub($integracion->repositorio_url);
+
+        if (! $partes) {
+            return back()->with('error', 'La URL del repositorio de GitHub no es válida.');
+        }
+
+        $integracion->update([
+            'repositorio_propietario' => $partes['owner'],
+            'repositorio_nombre' => $partes['repo'],
+            'estado' => 'manual',
+            'ultimo_intento' => now(),
+            'ultimo_error' => 'Sincronización automática pendiente de configuración SSL o red.',
+        ]);
+
+        Actualizacion::create([
+            'proyecto_id' => $proyecto->id,
+            'titulo' => 'Repositorio configurado manualmente',
+            'detalles' => 'DevControl configuró manualmente el repositorio '
+                .$partes['owner'].'/'.$partes['repo'].'.',
+        ]);
+
+        return back()->with('success', 'Repositorio configurado manualmente.');
+    }
+
+    private function guardarIntegracionGithub(Proyecto $proyecto): void
+    {
+        if (! $proyecto->repositorio_url) {
+            $proyecto->integracionGithub()->delete();
+
+            return;
+        }
+
+        $proyecto->integracionGithub()->updateOrCreate(
+            ['proveedor' => 'github'],
+            [
+                'repositorio_url' => $proyecto->repositorio_url,
+                'estado' => 'pendiente',
+                'ultimo_error' => null,
+            ]
+        );
+    }
+
+    private function partesRepositorioGithub(string $url): ?array
+    {
+        $partes = parse_url($url);
+        $ruta = trim($partes['path'] ?? '', '/');
+        $segmentos = explode('/', $ruta);
+
+        if (($partes['host'] ?? null) !== 'github.com' || count($segmentos) !== 2) {
+            return null;
+        }
+
+        $repo = preg_replace('/\.git$/', '', $segmentos[1]);
+
+        return $repo ? ['owner' => $segmentos[0], 'repo' => $repo] : null;
+    }
 
     /**
      * Eliminar proyecto.
@@ -369,7 +632,6 @@ class ProyectoController extends Controller
             );
     }
 
-
     /**
      * Obtener estadísticas del proyecto.
      */
@@ -381,7 +643,7 @@ class ProyectoController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        if (!$proyecto) {
+        if (! $proyecto) {
             return [
                 'pendientes' => 0,
                 'actualizaciones' => 0,
@@ -392,20 +654,23 @@ class ProyectoController extends Controller
             ];
         }
 
-
         /*
         |--------------------------------------------------------------------------
         | Obtener relaciones
         |--------------------------------------------------------------------------
         */
 
-        $tareas = $proyecto->tareas ?? collect();
+        $tareas = Schema::hasTable('tareas')
+            ? $proyecto->tareas
+            : collect();
 
-        $bugs = $proyecto->bugs ?? collect();
+        $bugs = Schema::hasTable('bugs')
+            ? $proyecto->bugs
+            : collect();
 
-        $actualizaciones =
-            $proyecto->actualizaciones ?? collect();
-
+        $actualizaciones = Schema::hasTable('actualizaciones')
+            ? $proyecto->actualizaciones
+            : collect();
 
         /*
         |--------------------------------------------------------------------------
@@ -420,7 +685,6 @@ class ProyectoController extends Controller
             ])
             ->count();
 
-
         /*
         |--------------------------------------------------------------------------
         | Tareas completadas
@@ -434,7 +698,6 @@ class ProyectoController extends Controller
             ])
             ->count();
 
-
         /*
         |--------------------------------------------------------------------------
         | Total de tareas
@@ -442,7 +705,6 @@ class ProyectoController extends Controller
         */
 
         $totalTareas = $tareas->count();
-
 
         /*
         |--------------------------------------------------------------------------
@@ -468,7 +730,6 @@ class ProyectoController extends Controller
             );
         }
 
-
         /*
         |--------------------------------------------------------------------------
         | Asegurar que esté entre 0 y 100
@@ -482,7 +743,6 @@ class ProyectoController extends Controller
                 $progreso
             )
         );
-
 
         /*
         |--------------------------------------------------------------------------
@@ -500,7 +760,6 @@ class ProyectoController extends Controller
             ]);
         }
 
-
         /*
         |--------------------------------------------------------------------------
         | Regresar estadísticas
@@ -510,8 +769,7 @@ class ProyectoController extends Controller
         return [
             'pendientes' => $pendientes,
 
-            'actualizaciones' =>
-                $actualizaciones->count(),
+            'actualizaciones' => $actualizaciones->count(),
 
             'completados' => $completados,
 
@@ -522,7 +780,6 @@ class ProyectoController extends Controller
             'total_tareas' => $totalTareas,
         ];
     }
-
 
     /**
      * Actualizar progreso de un proyecto
@@ -539,10 +796,9 @@ class ProyectoController extends Controller
 
         $proyecto = Proyecto::find($proyectoId);
 
-        if (!$proyecto) {
+        if (! $proyecto) {
             return;
         }
-
 
         /*
         |--------------------------------------------------------------------------
@@ -553,7 +809,6 @@ class ProyectoController extends Controller
         $totalTareas = $proyecto
             ->tareas()
             ->count();
-
 
         /*
         |--------------------------------------------------------------------------
@@ -568,7 +823,6 @@ class ProyectoController extends Controller
                 'Completada',
             ])
             ->count();
-
 
         /*
         |--------------------------------------------------------------------------
@@ -587,7 +841,6 @@ class ProyectoController extends Controller
             );
         }
 
-
         /*
         |--------------------------------------------------------------------------
         | Asegurar rango 0 - 100
@@ -602,7 +855,6 @@ class ProyectoController extends Controller
             )
         );
 
-
         /*
         |--------------------------------------------------------------------------
         | Guardar progreso
@@ -614,7 +866,6 @@ class ProyectoController extends Controller
         ]);
     }
 
-
     /**
      * Obtener información del usuario autenticado.
      *
@@ -623,7 +874,6 @@ class ProyectoController extends Controller
      * $usuario['nombre']
      * $usuario['rol']
      * $usuario['foto']
-     *
      */
     private function obtenerUsuario()
     {
@@ -635,7 +885,7 @@ class ProyectoController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        if (!$user) {
+        if (! $user) {
 
             return [
                 'nombre' => 'Jesús Guerra',
@@ -646,7 +896,6 @@ class ProyectoController extends Controller
             ];
         }
 
-
         /*
         |--------------------------------------------------------------------------
         | Regresar información del usuario
@@ -654,18 +903,15 @@ class ProyectoController extends Controller
         */
 
         return [
-            'nombre' =>
-                $user->nombre
+            'nombre' => $user->nombre
                 ?? $user->name
                 ?? 'Jesús Guerra',
 
-            'rol' =>
-                $user->rol
+            'rol' => $user->rol
                 ?? 'Desarrollador',
 
-            'foto' =>
-                $user->foto
-                ? asset('storage/' . $user->foto)
+            'foto' => $user->foto
+                ? asset('storage/'.$user->foto)
                 : asset(
                     'storage/images/jesus-guerra.jpg'
                 ),

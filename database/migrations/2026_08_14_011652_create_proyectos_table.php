@@ -15,6 +15,11 @@ return new class extends Migration
             $table->id();
             $table->string('nombre', 150);
             $table->text('descripcion')->nullable();
+            $table->text('contexto')->nullable();
+            $table->text('objetivo')->nullable();
+            $table->text('tecnologias')->nullable();
+            $table->text('reglas')->nullable();
+            $table->string('repositorio_url', 500)->nullable();
             $table->date('fecha_inicio');
             $table->date('fecha_meta')->nullable();
             $table->string('estado', 30)->default('activo');

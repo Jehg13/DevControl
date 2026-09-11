@@ -59,6 +59,8 @@
 
     $notasLista = $notas ?? collect();
 
+    $seccionesLista = $proyectoActual?->secciones ?? collect();
+
     $estadoProyecto =
         $proyectoActual?->estado ?? 'Activo';
 
@@ -174,11 +176,12 @@
 
         {{-- NAVEGACIÓN --}}
 
+        @include('admin.partials.menu-principal')
         <nav class="space-y-1">
 
             {{-- DASHBOARD --}}
 
-            <a href="#"
+            <a href="{{ route('dashboard') }}"
                class="flex items-center gap-3 rounded-lg px-3.5 py-2.5
                       text-sm font-semibold text-gray-400
                       transition hover:bg-white/5 hover:text-white">
@@ -206,7 +209,7 @@
 
             {{-- PROYECTOS --}}
 
-            <a href="#"
+            <a href="{{ route('proyectos.index') }}"
                class="flex items-center gap-3 rounded-lg
                       bg-[#d61f2c] px-3.5 py-2.5
                       text-sm font-bold text-white">
@@ -231,8 +234,7 @@
 
             {{-- TAREAS --}}
 
-            <a href="#"
-               onclick="showTab('tareas', document.querySelector('[data-tab=tareas]')); return false;"
+            <a href="{{ route('tareas.index') }}"
                class="flex items-center gap-3 rounded-lg px-3.5 py-2.5
                       text-sm font-semibold text-gray-400
                       transition hover:bg-white/5 hover:text-white">
@@ -258,8 +260,7 @@
 
             {{-- BUGS --}}
 
-            <a href="#"
-               onclick="showTab('bugs', document.querySelector('[data-tab=bugs]')); return false;"
+            <a href="{{ route('bugs.index') }}"
                class="flex items-center gap-3 rounded-lg px-3.5 py-2.5
                       text-sm font-semibold text-gray-400
                       transition hover:bg-white/5 hover:text-white">
@@ -287,8 +288,7 @@
 
             {{-- ACTUALIZACIONES --}}
 
-            <a href="#"
-               onclick="showTab('actualizaciones', document.querySelector('[data-tab=actualizaciones]')); return false;"
+            <a href="{{ route('actualizaciones') }}"
                class="flex items-center gap-3 rounded-lg px-3.5 py-2.5
                       text-sm font-semibold text-gray-400
                       transition hover:bg-white/5 hover:text-white">
@@ -316,8 +316,7 @@
 
             {{-- ARCHIVOS --}}
 
-            <a href="#"
-               onclick="showTab('archivos', document.querySelector('[data-tab=archivos]')); return false;"
+            <a href="{{ route('archivos') }}"
                class="flex items-center gap-3 rounded-lg px-3.5 py-2.5
                       text-sm font-semibold text-gray-400
                       transition hover:bg-white/5 hover:text-white">
@@ -340,6 +339,7 @@
 
             </a>
 
+            @include('admin.partials.navegacion-modulos')
         </nav>
 
 
@@ -496,16 +496,28 @@
                 </div>
 
 
-                <span class="font-mono2 text-xs text-gray-600">
+                <div class="flex items-center gap-3">
+                    <span class="font-mono2 text-xs text-gray-600">
+                        {{ method_exists($proyectosLista, 'total')
+                            ? $proyectosLista->total()
+                            : $proyectosLista->count()
+                        }}
+                        proyecto(s)
+                    </span>
 
-                    {{ method_exists($proyectosLista, 'total')
-                        ? $proyectosLista->total()
-                        : $proyectosLista->count()
-                    }}
-
-                    proyecto(s)
-
-                </span>
+                    <button type="button"
+                            onclick="openProjectModal('crear')"
+                            class="flex items-center gap-2 rounded-xl bg-[#d61f2c]
+                                   px-4 py-2.5 text-sm font-bold text-white
+                                   transition hover:bg-[#b8161f]">
+                        <svg xmlns="http://www.w3.org/2000/svg"
+                             class="h-4 w-4" viewBox="0 0 24 24"
+                             fill="none" stroke="currentColor" stroke-width="2.2">
+                            <path d="M12 5v14M5 12h14"/>
+                        </svg>
+                        Crear proyecto
+                    </button>
+                </div>
 
             </div>
 
@@ -880,7 +892,7 @@
 
                     <span class="flex items-center gap-1.5">
 
-                        Objetivo:
+                        Fecha objetivo:
 
                         <span class="text-gray-300">
 
@@ -1089,6 +1101,173 @@
 
                     </div>
 
+                    {{-- CONTEXTO --}}
+
+                    <div class="rounded-2xl border border-white/10
+                                bg-[#0f0f11] p-5">
+
+                        <div class="flex items-center justify-between gap-4">
+                            <h2 class="font-display text-lg font-bold text-white">
+                                Contexto del proyecto
+                            </h2>
+
+                            @if($proyectoActual->repositorio_url)
+                                <a href="{{ $proyectoActual->repositorio_url }}"
+                                   target="_blank"
+                                   rel="noopener noreferrer"
+                                   class="font-mono2 text-xs font-semibold text-[#ff5b5b] hover:underline">
+                                    Ver repositorio
+                                </a>
+                            @endif
+                        </div>
+
+                        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                            <div>
+                                <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Qué se hará</p>
+                                <p class="mt-1 text-sm leading-relaxed text-gray-400">
+                                    {{ $proyectoActual->contexto ?: 'Sin contexto registrado.' }}
+                                </p>
+                            </div>
+                            <div>
+                                <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Objetivo</p>
+                                <p class="mt-1 text-sm leading-relaxed text-gray-400">
+                                    {{ $proyectoActual->objetivo ?: 'Sin objetivo registrado.' }}
+                                </p>
+                            </div>
+                            <div>
+                                <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Tecnologías</p>
+                                <p class="mt-1 text-sm leading-relaxed text-gray-400">
+                                    {{ $proyectoActual->tecnologias ?: 'Sin tecnologías registradas.' }}
+                                </p>
+                            </div>
+                            <div>
+                                <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Reglas del proyecto</p>
+                                <p class="mt-1 text-sm leading-relaxed text-gray-400">
+                                    {{ $proyectoActual->reglas ?: 'Sin reglas registradas.' }}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 border-t border-white/10 pt-4">
+                            <div class="flex items-center justify-between">
+                                <h3 class="font-display font-bold text-white">Secciones y funcionalidades</h3>
+                                <span class="font-mono2 text-xs text-gray-600">{{ $seccionesLista->count() }} secciones</span>
+                            </div>
+
+                            @forelse($seccionesLista as $seccion)
+                                <div class="mt-4 rounded-xl border border-white/10 bg-black/20 p-4">
+                                    <p class="font-semibold text-white">{{ $seccion->nombre }}</p>
+                                    @if($seccion->descripcion)
+                                        <p class="mt-1 text-sm text-gray-500">{{ $seccion->descripcion }}</p>
+                                    @endif
+                                    <div class="mt-3 space-y-2">
+                                        @forelse($seccion->funcionalidades as $funcionalidad)
+                                            <div class="flex items-start justify-between gap-3 text-sm">
+                                                <div>
+                                                    <p class="text-gray-300">{{ $funcionalidad->nombre }}</p>
+                                                    @if($funcionalidad->descripcion)
+                                                        <p class="text-xs text-gray-600">{{ $funcionalidad->descripcion }}</p>
+                                                    @endif
+                                                </div>
+                                                <span class="shrink-0 font-mono2 text-[10px] text-gray-500">{{ $funcionalidad->estado }}</span>
+                                            </div>
+                                        @empty
+                                            <p class="text-xs text-gray-600">Sin funcionalidades registradas.</p>
+                                        @endforelse
+                                    </div>
+                                </div>
+                            @empty
+                                <p class="mt-3 text-sm text-gray-600">Todavía no hay secciones registradas.</p>
+                            @endforelse
+                        </div>
+                    </div>
+
+                    @php
+                        $github = $proyectoActual->integracionGithub;
+                    @endphp
+
+                    <div class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h2 class="font-display text-lg font-bold text-white">Integración GitHub</h2>
+                                <p class="mt-1 text-sm text-gray-500">Estado del repositorio asociado al proyecto.</p>
+                            </div>
+                            @if($github)
+                                <span class="rounded-full border px-2.5 py-1 font-mono2 text-[10px] font-semibold
+                                    {{ $github->estado === 'sincronizado'
+                                        ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+                                        : ($github->estado === 'error'
+                                            ? 'border-[#d61f2c]/20 bg-[#d61f2c]/10 text-[#ff5b5b]'
+                                            : ($github->estado === 'manual'
+                                                ? 'border-blue-500/20 bg-blue-500/10 text-blue-400'
+                                                : 'border-yellow-500/20 bg-yellow-500/10 text-yellow-400')) }}">
+                                    {{ $github->estado === 'sincronizado'
+                                        ? 'GitHub conectado'
+                                        : ($github->estado === 'manual'
+                                            ? 'Configurado manualmente'
+                                            : ucfirst($github->estado)) }}
+                                </span>
+                            @endif
+                        </div>
+
+                        @if($github)
+                            <div class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                                <div>
+                                    <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Repositorio</p>
+                                    <a href="{{ $github->repositorio_url }}" target="_blank" rel="noopener noreferrer"
+                                       class="mt-1 block truncate text-gray-300 hover:text-[#ff5b5b]">
+                                        {{ $github->repositorio_propietario && $github->repositorio_nombre
+                                            ? $github->repositorio_propietario . '/' . $github->repositorio_nombre
+                                            : $github->repositorio_url }}
+                                    </a>
+                                </div>
+                                <div>
+                                    <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Rama principal</p>
+                                    <p class="mt-1 text-gray-300">{{ $github->rama_principal ?: 'Pendiente de sincronización' }}</p>
+                                </div>
+                                <div>
+                                    <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Último commit</p>
+                                    <p class="mt-1 truncate text-gray-300" title="{{ $github->ultimo_commit_mensaje }}">
+                                        {{ $github->ultimo_commit_sha ? substr($github->ultimo_commit_sha, 0, 7) : 'Pendiente de sincronización' }}
+                                    </p>
+                                </div>
+                                <div>
+                                    <p class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Última sincronización</p>
+                                    <p class="mt-1 text-gray-300">
+                                        {{ $github->ultima_sincronizacion?->diffForHumans() ?: 'Nunca' }}
+                                    </p>
+                                </div>
+                            </div>
+
+                            @if($github->ultimo_error)
+                                <p class="mt-3 rounded-lg border border-[#d61f2c]/20 bg-[#d61f2c]/5 px-3 py-2 text-xs text-[#ff5b5b]">
+                                    {{ $github->ultimo_error }}
+                                </p>
+                            @endif
+
+                            <div class="mt-4 flex flex-wrap gap-2">
+                                <form method="POST" action="{{ route('proyectos.github.manual', $proyectoActual) }}">
+                                    @csrf
+                                    <button type="submit"
+                                            class="rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-2.5 text-sm font-bold text-blue-400 transition hover:bg-blue-500/20">
+                                        Configurar manualmente
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ route('proyectos.github.sync', $proyectoActual) }}">
+                                    @csrf
+                                    <button type="submit"
+                                            class="rounded-xl bg-[#d61f2c] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#b8161f]">
+                                        Sincronizar ahora
+                                    </button>
+                                </form>
+                            </div>
+                        @else
+                            <p class="mt-4 text-sm text-gray-600">
+                                Guarda una URL de GitHub en la configuración del proyecto para preparar la integración.
+                            </p>
+                        @endif
+                    </div>
+
 
                     {{-- ACTIVIDAD --}}
 
@@ -1130,8 +1309,11 @@
 
                                             <p class="text-gray-300">
 
-                                                {{ $actividad->descripcion
+                                                {{ $actividad->detalles
+                                                    ?? $actividad->detalle
+                                                    ?? $actividad->descripcion
                                                     ?? $actividad->texto
+                                                    ?? $actividad->titulo
                                                     ?? 'Actividad registrada'
                                                 }}
 
@@ -2105,6 +2287,74 @@
 
             </div>
 
+            <div>
+                <label for="contexto" class="mb-1.5 block text-sm font-semibold text-gray-300">
+                    Contexto del proyecto
+                </label>
+                <textarea name="contexto" id="contexto" rows="3"
+                          placeholder="¿Qué se construirá y qué problema resolverá?"
+                          class="w-full resize-none rounded-xl border border-white/10 bg-black/40
+                                 px-3.5 py-2.5 text-sm text-white placeholder-gray-600 outline-none
+                                 transition focus:border-[#d61f2c]"></textarea>
+            </div>
+
+            <div>
+                <label for="objetivo" class="mb-1.5 block text-sm font-semibold text-gray-300">
+                    Objetivo principal
+                </label>
+                <textarea name="objetivo" id="objetivo" rows="2"
+                          placeholder="¿Cuál es el resultado esperado?"
+                          class="w-full resize-none rounded-xl border border-white/10 bg-black/40
+                                 px-3.5 py-2.5 text-sm text-white placeholder-gray-600 outline-none
+                                 transition focus:border-[#d61f2c]"></textarea>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="tecnologias" class="mb-1.5 block text-sm font-semibold text-gray-300">
+                        Tecnologías
+                    </label>
+                    <textarea name="tecnologias" id="tecnologias" rows="2"
+                              placeholder="Laravel, PHP, MySQL..."
+                              class="w-full resize-none rounded-xl border border-white/10 bg-black/40
+                                     px-3.5 py-2.5 text-sm text-white placeholder-gray-600 outline-none
+                                     transition focus:border-[#d61f2c]"></textarea>
+                </div>
+                <div>
+                    <label for="reglas" class="mb-1.5 block text-sm font-semibold text-gray-300">
+                        Reglas importantes
+                    </label>
+                    <textarea name="reglas" id="reglas" rows="2"
+                              placeholder="Reglas que la IA debe respetar..."
+                              class="w-full resize-none rounded-xl border border-white/10 bg-black/40
+                                     px-3.5 py-2.5 text-sm text-white placeholder-gray-600 outline-none
+                                     transition focus:border-[#d61f2c]"></textarea>
+                </div>
+            </div>
+
+            <div>
+                <label for="repositorio_url" class="mb-1.5 block text-sm font-semibold text-gray-300">
+                    Repositorio del proyecto
+                </label>
+                <input type="url" name="repositorio_url" id="repositorio_url"
+                       placeholder="https://github.com/usuario/repositorio"
+                       class="w-full rounded-xl border border-white/10 bg-black/40 px-3.5 py-2.5 text-sm
+                              text-white placeholder-gray-600 outline-none transition focus:border-[#d61f2c]">
+            </div>
+
+            <div class="border-t border-white/10 pt-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <h3 class="font-display font-bold text-white">Secciones y funcionalidades</h3>
+                        <p class="mt-1 text-xs text-gray-600">Describe la estructura que DevControl deberá entender.</p>
+                    </div>
+                    <button type="button" onclick="addSection()" class="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-gray-300 hover:bg-white/5">
+                        + Sección
+                    </button>
+                </div>
+                <div id="seccionesContainer" class="mt-4 space-y-4"></div>
+            </div>
+
 
             {{-- FECHAS --}}
 
@@ -2380,6 +2630,83 @@
     const proyectoUpdateUrlTemplate =
         @json(route('proyectos.update', ['proyecto' => '__ID__']));
 
+    let sectionIndex = 0;
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function addFeature(sectionElement, sectionIndex, feature = {}) {
+        const featuresContainer = sectionElement.querySelector('.features-container');
+        const featureIndex = featuresContainer.children.length;
+        const featureElement = document.createElement('div');
+
+        featureElement.className = 'feature-row rounded-lg border border-white/10 bg-black/30 p-3';
+        featureElement.innerHTML = `
+            <div class="flex items-start gap-2">
+                <div class="grid flex-1 gap-2 sm:grid-cols-2">
+                    <input type="text" name="secciones[${sectionIndex}][funcionalidades][${featureIndex}][nombre]"
+                           value="${escapeHtml(feature.nombre)}" required placeholder="Nombre de la funcionalidad"
+                           class="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white placeholder-gray-600 outline-none focus:border-[#d61f2c]">
+                    <select name="secciones[${sectionIndex}][funcionalidades][${featureIndex}][estado]"
+                            class="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white outline-none focus:border-[#d61f2c]">
+                        ${['Pendiente', 'En desarrollo', 'Parcial', 'Implementada', 'Desconocida', 'Requiere revisión']
+                            .map(estado => `<option value="${estado}" ${feature.estado === estado ? 'selected' : ''}>${estado}</option>`).join('')}
+                    </select>
+                    <textarea name="secciones[${sectionIndex}][funcionalidades][${featureIndex}][descripcion]"
+                              rows="2" placeholder="¿Qué hace esta funcionalidad?"
+                              class="sm:col-span-2 w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white placeholder-gray-600 outline-none focus:border-[#d61f2c]">${escapeHtml(feature.descripcion)}</textarea>
+                </div>
+                <button type="button" onclick="this.closest('.feature-row').remove()" class="px-1 text-gray-600 hover:text-[#ff5b5b]" aria-label="Eliminar funcionalidad">×</button>
+            </div>`;
+
+        featuresContainer.appendChild(featureElement);
+    }
+
+    function addSection(section = {}) {
+        const currentIndex = sectionIndex++;
+        const sectionElement = document.createElement('div');
+
+        sectionElement.className = 'section-row rounded-xl border border-white/10 bg-black/20 p-4';
+        sectionElement.innerHTML = `
+            <div class="flex items-start gap-2">
+                <div class="grid flex-1 gap-2">
+                    <input type="text" name="secciones[${currentIndex}][nombre]"
+                           value="${escapeHtml(section.nombre)}" required placeholder="Ej. Usuarios, Tickets, Administración"
+                           class="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white placeholder-gray-600 outline-none focus:border-[#d61f2c]">
+                    <textarea name="secciones[${currentIndex}][descripcion]" rows="2"
+                              placeholder="¿Qué cubre esta sección?"
+                              class="w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white placeholder-gray-600 outline-none focus:border-[#d61f2c]">${escapeHtml(section.descripcion)}</textarea>
+                </div>
+                <button type="button" onclick="this.closest('.section-row').remove()" class="px-1 text-gray-600 hover:text-[#ff5b5b]" aria-label="Eliminar sección">×</button>
+            </div>
+            <div class="mt-3">
+                <div class="mb-2 flex items-center justify-between">
+                    <span class="font-mono2 text-[10px] uppercase tracking-wide text-gray-600">Funcionalidades</span>
+                    <button type="button" onclick="addFeature(this.closest('.section-row'), ${currentIndex})" class="text-xs font-semibold text-[#ff5b5b] hover:underline">+ Funcionalidad</button>
+                </div>
+                <div class="features-container space-y-2"></div>
+            </div>`;
+
+        document.getElementById('seccionesContainer').appendChild(sectionElement);
+
+        (section.funcionalidades ?? []).forEach(feature => {
+            addFeature(sectionElement, currentIndex, feature);
+        });
+    }
+
+    function resetSections(secciones = []) {
+        sectionIndex = 0;
+        const container = document.getElementById('seccionesContainer');
+        container.innerHTML = '';
+        secciones.forEach(seccion => addSection(seccion));
+    }
+
 
     /*
     |--------------------------------------------------------------------------
@@ -2411,6 +2738,7 @@
 
 
         form.reset();
+        resetSections();
 
 
         /*
@@ -2444,6 +2772,7 @@
             document.getElementById('progreso').value =
                 '0';
 
+            addSection();
 
             /*
             | Fecha actual
@@ -2510,6 +2839,22 @@
             document.getElementById('descripcion').value =
                 proyecto.descripcion ?? '';
 
+            document.getElementById('contexto').value =
+                proyecto.contexto ?? '';
+
+            document.getElementById('objetivo').value =
+                proyecto.objetivo ?? '';
+
+            document.getElementById('tecnologias').value =
+                proyecto.tecnologias ?? '';
+
+            document.getElementById('reglas').value =
+                proyecto.reglas ?? '';
+
+            document.getElementById('repositorio_url').value =
+                proyecto.repositorio_url ?? '';
+
+            resetSections(proyecto.secciones ?? []);
 
             document.getElementById('fecha_inicio').value =
                 proyecto.fecha_inicio
@@ -2670,5 +3015,6 @@
 
 </script>
 
+@include('admin.partials.asistente-flotante')
 </body>
 </html>

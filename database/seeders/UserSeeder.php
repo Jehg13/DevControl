@@ -14,6 +14,7 @@ class UserSeeder extends Seeder
             'name' => 'Jesus Guerra',
             'email' => 'jehg13072002@gmail.com',
             'password' => Hash::make('13072002'),
+            'rol' => 'admin',
         ]);
     }
 }

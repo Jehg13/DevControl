@@ -178,7 +178,8 @@
                 </form>
 
                 <p class="mt-8 text-center text-xs text-gray-400">
-                    Acceso exclusivo para el equipo de DevControl.
+                    ¿Aún no tienes una cuenta?
+                    <a href="{{ route('register') }}" class="font-semibold text-[#d61f2c] hover:underline">Regístrate</a>
                 </p>
 
             </div>

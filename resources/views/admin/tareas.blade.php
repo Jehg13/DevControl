@@ -136,12 +136,13 @@
 
 
     {{-- NAVEGACIÓN --}}
+    @include('admin.partials.menu-principal')
     <nav class="space-y-1">
 
 
         {{-- DASHBOARD --}}
         <a
-            href="#"
+            href="{{ route('dashboard') }}"
             class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
 
             <svg
@@ -166,7 +167,7 @@
 
         {{-- PROYECTOS --}}
         <a
-            href="#"
+            href="{{ route('proyectos.index') }}"
             class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
 
             <svg
@@ -211,7 +212,7 @@
 
         {{-- BUGS --}}
         <a
-            href="#"
+            href="{{ route('bugs.index') }}"
             class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
 
             Bugs
@@ -221,7 +222,7 @@
 
         {{-- ACTUALIZACIONES --}}
         <a
-            href="#"
+            href="{{ route('actualizaciones') }}"
             class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
 
             Actualizaciones
@@ -231,13 +232,14 @@
 
         {{-- ARCHIVOS --}}
         <a
-            href="#"
+            href="{{ route('archivos') }}"
             class="flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-gray-400 transition hover:bg-white/5 hover:text-white">
 
             Archivos
 
         </a>
 
+        @include('admin.partials.navegacion-modulos')
     </nav>
 
 
@@ -413,6 +415,7 @@
             </label>
 
             <select
+                id="crearProyecto"
                 name="proyecto_id"
                 required
                 class="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-[#d61f2c]/50">
@@ -435,6 +438,21 @@
 
             </select>
 
+        </div>
+
+        <div class="grid gap-5 md:grid-cols-2">
+            <div>
+                <label class="mb-2 block font-mono2 text-xs font-semibold text-gray-400">Sección</label>
+                <select id="crearSeccion" name="seccion_id" class="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-[#d61f2c]/50">
+                    <option value="">Sin sección</option>
+                </select>
+            </div>
+            <div>
+                <label class="mb-2 block font-mono2 text-xs font-semibold text-gray-400">Funcionalidad</label>
+                <select id="crearFuncionalidad" name="funcionalidad_id" class="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-[#d61f2c]/50">
+                    <option value="">Sin funcionalidad</option>
+                </select>
+            </div>
         </div>
 
 
@@ -547,6 +565,21 @@
 
             </div>
 
+        </div>
+
+        <div class="grid gap-5 md:grid-cols-2">
+            <div>
+                <label class="mb-2 block font-mono2 text-xs font-semibold text-gray-400">Sección</label>
+                <select id="editarSeccion" name="seccion_id" class="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-[#d61f2c]/50">
+                    <option value="">Sin sección</option>
+                </select>
+            </div>
+            <div>
+                <label class="mb-2 block font-mono2 text-xs font-semibold text-gray-400">Funcionalidad</label>
+                <select id="editarFuncionalidad" name="funcionalidad_id" class="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-[#d61f2c]/50">
+                    <option value="">Sin funcionalidad</option>
+                </select>
+            </div>
         </div>
 
 
@@ -817,6 +850,15 @@
 
                             @endif
 
+                            @if($tarea->seccion || $tarea->funcionalidad)
+                                <p class="mt-2 truncate font-mono2 text-[10px] text-gray-600">
+                                    {{ $tarea->seccion?->nombre ?: 'Sin sección' }}
+                                    @if($tarea->funcionalidad)
+                                        / {{ $tarea->funcionalidad->nombre }}
+                                    @endif
+                                </p>
+                            @endif
+
 
                             <div class="mt-4 flex items-center justify-between">
 
@@ -859,6 +901,8 @@
                                     onclick="abrirEditarTarea(this)"
                                     data-id="{{ $tarea->id }}"
                                     data-proyecto-id="{{ $tarea->proyecto_id }}"
+                                    data-seccion-id="{{ $tarea->seccion_id ?? '' }}"
+                                    data-funcionalidad-id="{{ $tarea->funcionalidad_id ?? '' }}"
                                     data-titulo="{{ $tarea->titulo }}"
                                     data-descripcion="{{ $tarea->descripcion ?? '' }}"
                                     data-prioridad="{{ $tarea->prioridad }}"
@@ -1633,6 +1677,62 @@
 
 <script>
 
+@php
+    $proyectosContexto = $proyectos->map(function ($proyecto) {
+        return [
+            'id' => $proyecto->id,
+            'secciones' => $proyecto->secciones->map(function ($seccion) {
+                return [
+                    'id' => $seccion->id,
+                    'nombre' => $seccion->nombre,
+                    'funcionalidades' => $seccion->funcionalidades->map(function ($funcionalidad) {
+                        return [
+                            'id' => $funcionalidad->id,
+                            'nombre' => $funcionalidad->nombre,
+                        ];
+                    })->values(),
+                ];
+            })->values(),
+        ];
+    })->values();
+@endphp
+
+const proyectosContexto = @json($proyectosContexto);
+
+function cargarContextoTarea(proyectoId, seccionId = '', funcionalidadId = '', prefijo = 'crear')
+{
+    const proyecto = proyectosContexto.find(item => String(item.id) === String(proyectoId));
+    const seccion = document.getElementById(`${prefijo}Seccion`);
+    const funcionalidad = document.getElementById(`${prefijo}Funcionalidad`);
+
+    seccion.innerHTML = '<option value="">Sin sección</option>';
+    funcionalidad.innerHTML = '<option value="">Sin funcionalidad</option>';
+
+    (proyecto?.secciones || []).forEach(item => {
+        seccion.insertAdjacentHTML('beforeend', `<option value="${item.id}">${item.nombre}</option>`);
+    });
+    seccion.value = seccionId || '';
+
+    const seleccionada = (proyecto?.secciones || []).find(item => String(item.id) === String(seccion.value));
+    (seleccionada?.funcionalidades || []).forEach(item => {
+        funcionalidad.insertAdjacentHTML('beforeend', `<option value="${item.id}">${item.nombre}</option>`);
+    });
+    funcionalidad.value = funcionalidadId || '';
+}
+
+document.getElementById('crearProyecto')?.addEventListener('change', event => {
+    cargarContextoTarea(event.target.value);
+});
+document.getElementById('crearSeccion')?.addEventListener('change', event => {
+    cargarContextoTarea(document.getElementById('crearProyecto').value, event.target.value);
+});
+document.getElementById('editarProyecto')?.addEventListener('change', event => {
+    cargarContextoTarea(event.target.value, '', '', 'editar');
+});
+document.getElementById('editarSeccion')?.addEventListener('change', event => {
+    cargarContextoTarea(document.getElementById('editarProyecto').value, event.target.value, '', 'editar');
+});
+
 
 /*
 |--------------------------------------------------------------------------
@@ -1996,6 +2096,13 @@ function abrirEditarTarea(button)
     document.getElementById('editarProyecto').value =
         button.dataset.proyectoId || '';
 
+    cargarContextoTarea(
+        button.dataset.proyectoId,
+        button.dataset.seccionId,
+        button.dataset.funcionalidadId,
+        'editar'
+    );
+
 
     document.getElementById('editarTitulo').value =
         button.dataset.titulo || '';
@@ -2157,6 +2264,7 @@ document.addEventListener(
 </script>
 
 
+@include('admin.partials.asistente-flotante')
 </body>
 
 </html>
