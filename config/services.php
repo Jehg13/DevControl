@@ -37,4 +37,8 @@ return [
         'git_binary' => env('GIT_BINARY'),
     ],
 
+    'alerts' => [
+        'email' => env('MAIL_ALERT_TO'),
+    ],
+
 ];

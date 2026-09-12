@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Actualizacion;
 use App\Models\Proyecto;
+use App\Models\Configuracion;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
@@ -669,7 +670,7 @@ class ProyectoController extends Controller
             throw new \RuntimeException('Configura una URL válida de GitHub antes de crear commits.');
         }
 
-        $rama = $datos['rama'] ?: ($integracion->rama_principal ?: 'main');
+        $rama = $datos['rama'] ?: ($integracion->rama_principal ?: Configuracion::valor('github_rama', 'main'));
         $endpoint = "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/contents/".ltrim($datos['ruta'], '/');
         $cliente = $this->clienteGithub(true);
         $existente = $cliente->get($endpoint, ['ref' => $rama]);
@@ -799,7 +800,7 @@ class ProyectoController extends Controller
             throw new \RuntimeException('No hay cambios locales publicables en el proyecto.');
         }
 
-        $rama = $datos['rama'] ?: ($integracion->rama_principal ?: 'main');
+        $rama = $datos['rama'] ?: ($integracion->rama_principal ?: Configuracion::valor('github_rama', 'main'));
         $cliente = $this->clienteGithub(true);
         $cliente->get('https://api.github.com/user')->throw();
         $repositorio = $cliente->get(

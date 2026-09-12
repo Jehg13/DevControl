@@ -12,8 +12,12 @@ use App\Http\Controllers\IncidenteController;
 use App\Http\Controllers\ActualizacionController;
 use App\Http\Controllers\UsuarioController;
 use App\Http\Controllers\RegisterController;
+use App\Http\Controllers\ActividadController;
+use App\Http\Controllers\ConfiguracionController;
 use App\Models\User;
 use App\Http\Controllers\NexusController;
+use App\Http\Controllers\MonitoreoController;
+use App\Http\Controllers\DashboardController;
 /*
 |--------------------------------------------------------------------------
 | Web Routes
@@ -53,7 +57,7 @@ Route::get('/dashboard/asistente/hallazgos', [NexusController::class, 'findings'
 Route::get('/dashboard/asistente/salud', [NexusController::class, 'health'])->name('nexus.health');
 Route::get('/dashboard/asistente/propuestas', [NexusController::class, 'proposals'])->name('nexus.proposals');
 Route::delete('/dashboard/asistente/historial', [AsistenteController::class, 'clear'])->name('asistente.clear');
-Route::get('/dashboard', function(){ return view('admin.index'); })->name('dashboard');
+Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 Route::get('/dashboard/proyectos', [ProyectoController::class, 'index'])->name('proyectos.index');
 Route::post('/dashboard/proyectos', [ProyectoController::class, 'store'])->name('proyectos.store');
 Route::put('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'update'])->name('proyectos.update');
@@ -75,13 +79,17 @@ Route::put('/dashboard/bugs/{bug}', [BugController::class, 'update'])->name('bug
 Route::delete('/bugs/{bug}', [BugController::class, 'destroy'])->name('bugs.destroy');Route::get('/dashboard/archivos', function(){ return view('admin.archivos');})->name('archivos');
 Route::get('/dashboard/seguimiento', function(){ return view('admin.seguimiento');})->name('seguimiento');
 Route::get('/dashboard/notas', function(){ return view('admin.notas');})->name('notas');
-Route::get('/dashboard/monitoreo', function(){ return view('admin.monitoreo'); })->name('monitoreo');
+Route::get('/dashboard/monitoreo', [MonitoreoController::class, 'index'])->name('monitoreo');
+Route::post('/dashboard/monitoreo', [MonitoreoController::class, 'store'])->name('monitoreo.store');
+Route::post('/dashboard/monitoreo/{monitor}/comprobar', [MonitoreoController::class, 'check'])->name('monitoreo.check');
+Route::delete('/dashboard/monitoreo/{monitor}', [MonitoreoController::class, 'destroy'])->name('monitoreo.destroy');
 Route::get('/dashboard/incidentes', [IncidenteController::class, 'index'])->name('incidentes');
 Route::get('/dashboard/notificaciones', function(){ return view('admin.modulo-en-construccion', ['titulo' => 'Notificaciones', 'descripcion' => 'Alertas importantes de bugs, caídas, despliegues y tareas.']);})->name('notificaciones');
-Route::get('/dashboard/configuracion', function(){ return view('admin.configuracion'); })->name('configuracion');
+Route::get('/dashboard/configuracion', [ConfiguracionController::class, 'index'])->name('configuracion');
+Route::put('/dashboard/configuracion', [ConfiguracionController::class, 'update'])->name('configuracion.update');
 Route::get('/dashboard/usuarios', [UsuarioController::class, 'index'])->name('usuarios');
 Route::post('/dashboard/usuarios', [UsuarioController::class, 'store'])->name('usuarios.store');
 Route::put('/dashboard/usuarios/{usuario}', [UsuarioController::class, 'update'])->name('usuarios.update');
 Route::delete('/dashboard/usuarios/{usuario}', [UsuarioController::class, 'destroy'])->name('usuarios.destroy');
-Route::get('/dashboard/actividad', function(){ return view('admin.actividad'); })->name('actividad');
+Route::get('/dashboard/actividad', [ActividadController::class, 'index'])->name('actividad');
 });

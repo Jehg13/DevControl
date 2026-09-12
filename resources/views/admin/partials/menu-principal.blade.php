@@ -19,7 +19,6 @@
             ['route' => 'usuarios', 'label' => 'Usuarios', 'icon' => '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M17 14a5 5 0 0 1 4 6"/>'],
             ['route' => 'actividad', 'label' => 'Actividad', 'icon' => '<path d="M4 19V5M4 19h16M7 15l3-3 3 2 5-6"/>'],
             ['route' => 'archivos', 'label' => 'Archivos', 'icon' => '<path d="M4 7l4-3h5l4 3h3v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/><path d="M9 12h6"/>'],
-            ['route' => 'notificaciones', 'label' => 'Notificaciones', 'icon' => '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/>'],
             ['route' => 'configuracion', 'label' => 'Configuración', 'icon' => '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.7 1.7-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-2.4v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L8 17l.1-.1A1.7 1.7 0 0 0 8.4 15a1.7 1.7 0 0 0-1.5-1H6v-2.4h.9a1.7 1.7 0 0 0 1.5-1A1.7 1.7 0 0 0 8.1 9L8 8.9l1.7-1.7.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h2.4v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 9l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2v2.4h-.2a1.7 1.7 0 0 0-1.5.6Z"/>'],
         ];
     @endphp

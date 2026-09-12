@@ -44,13 +44,28 @@
                 <div>
                     <p class="font-mono2 text-xs text-gray-500">~ / monitoreo</p>
                     <h1 class="mt-2 font-display text-3xl font-bold">Monitoreo</h1>
-                    <p class="mt-2 text-sm text-gray-500">Vista visual preparada para conectar repositorios y servicios posteriormente.</p>
+                    <p class="mt-2 text-sm text-gray-500">Comprueba la disponibilidad de tus aplicaciones y APIs desde DevControl.</p>
                 </div>
-                <span class="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-2 font-mono2 text-xs text-yellow-300">Modo demostración</span>
+                <span class="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 font-mono2 text-xs text-emerald-300">Monitoreo HTTP activo</span>
             </header>
 
+            @if(session('success'))
+                <div class="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">{{ session('success') }}</div>
+            @endif
+            @if(session('error'))
+                <div class="mt-5 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">{{ session('error') }}</div>
+            @endif
+            @if($errors->any())
+                <div class="mt-5 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">{{ $errors->first() }}</div>
+            @endif
+
             <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                @foreach([['Servidores', '0', 'Sin conexiones activas', 'text-cyan-300'], ['Aplicaciones', '0', 'Sin aplicaciones vinculadas', 'text-purple-300'], ['Servicios', '0', 'Sin servicios registrados', 'text-yellow-300'], ['Alertas', '0', 'Sin alertas disponibles', 'text-emerald-300']] as $metric)
+                @foreach([
+                    ['Monitores', count($monitores), 'URLs configuradas', 'text-cyan-300'],
+                    ['Operativos', collect($monitores)->where('estado', 'operativo')->count(), 'Responden correctamente', 'text-emerald-300'],
+                    ['Con fallos', collect($monitores)->where('estado', 'fallo')->count(), 'Requieren revisión', 'text-red-300'],
+                    ['Pendientes', collect($monitores)->where('estado', 'pendiente')->count(), 'Aún sin comprobar', 'text-yellow-300'],
+                ] as $metric)
                     <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
                         <p class="font-mono2 text-[10px] uppercase tracking-widest text-gray-500">{{ $metric[0] }}</p>
                         <p class="mt-4 font-display text-3xl font-bold {{ $metric[3] }}">{{ $metric[1] }}</p>
@@ -59,47 +74,61 @@
                 @endforeach
             </div>
 
-            <section class="mt-6 grid gap-6 xl:grid-cols-3">
-                @foreach([
-                    ['Servidores', 'Equipos, VPS o entornos donde se ejecutan tus proyectos.', '🖥️', ['Servidor de producción', 'Servidor de pruebas', 'Entorno local']],
-                    ['Aplicaciones', 'Aplicaciones web y APIs que quieres mantener bajo observación.', '◈', ['Aplicación web', 'API principal', 'Panel administrativo']],
-                    ['Servicios', 'Componentes necesarios para que tus aplicaciones funcionen.', '⚙', ['Base de datos', 'Cola de trabajos', 'Almacenamiento']],
-                ] as $category)
-                    <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
-                        <div class="flex items-start justify-between gap-3">
-                            <div>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-xl text-[#ff5b5b]">{{ $category[2] }}</span>
-                                    <h2 class="font-display text-lg font-bold">{{ $category[0] }}</h2>
-                                </div>
-                                <p class="mt-2 text-xs leading-relaxed text-gray-500">{{ $category[1] }}</p>
-                            </div>
-                            <span class="rounded-full bg-yellow-400/10 px-2 py-1 font-mono2 text-[9px] text-yellow-300">Visual</span>
-                        </div>
-                        <div class="mt-5 space-y-3">
-                            @foreach($category[3] as $item)
-                                <div class="flex items-center justify-between rounded-xl border border-white/5 bg-black/30 px-3 py-3">
-                                    <span class="text-sm text-gray-300">{{ $item }}</span>
-                                    <span class="flex items-center gap-2 font-mono2 text-[10px] text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-600"></span>Sin conectar</span>
-                                </div>
+            <section class="mt-6 grid gap-6 xl:grid-cols-[1fr_1.5fr]">
+                <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
+                    <h2 class="font-display text-lg font-bold">Agregar monitor HTTP</h2>
+                    <p class="mt-1 text-xs leading-relaxed text-gray-500">Registra la URL pública de una aplicación o API. No requiere todavía acceso al VPS.</p>
+                    <form method="POST" action="{{ route('monitoreo.store') }}" class="mt-5 space-y-4">
+                        @csrf
+                        <input name="nombre" required maxlength="100" placeholder="Ej. API de producción" class="w-full rounded-lg border border-white/10 bg-black px-3 py-2.5 text-sm text-white">
+                        <select name="proyecto_id" class="w-full rounded-lg border border-white/10 bg-black px-3 py-2.5 text-sm text-white">
+                            <option value="">Sin proyecto asociado</option>
+                            @foreach($proyectos as $proyecto)
+                                <option value="{{ $proyecto->id }}">{{ $proyecto->nombre }}</option>
                             @endforeach
-                        </div>
-                    </article>
-                @endforeach
+                        </select>
+                        <input type="url" name="url" required placeholder="https://tu-dominio.com/api/health" class="w-full rounded-lg border border-white/10 bg-black px-3 py-2.5 text-sm text-white">
+                        <button class="w-full rounded-lg bg-[#d61f2c] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#ef3340]">Agregar monitor</button>
+                    </form>
+                </article>
+                <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
+                    <div class="flex items-center justify-between gap-3">
+                        <div><h2 class="font-display text-lg font-bold">Monitores configurados</h2><p class="mt-1 text-xs text-gray-500">Ejecuta una comprobación manual mientras conectamos el VPS.</p></div>
+                    </div>
+                    <div class="mt-5 space-y-3">
+                        @forelse($monitores as $monitor)
+                            @php
+                                $estadoColor = ['operativo' => 'bg-emerald-400', 'fallo' => 'bg-red-400', 'pendiente' => 'bg-gray-500'][$monitor['estado']] ?? 'bg-gray-500';
+                            @endphp
+                            <div class="rounded-xl border border-white/5 bg-black/30 p-3">
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div class="min-w-0"><p class="truncate text-sm font-semibold text-gray-200">{{ $monitor['nombre'] }}</p><p class="truncate font-mono2 text-[10px] text-gray-600">{{ $monitor['url'] }}</p><p class="mt-1 text-[10px] text-[#ff5b5b]">{{ optional($proyectos->firstWhere('id', $monitor['proyecto_id'] ?? null))->nombre ?? 'Sin proyecto asociado' }}</p></div>
+                                    <span class="flex items-center gap-2 font-mono2 text-[10px] text-gray-400"><span class="h-2 w-2 rounded-full {{ $estadoColor }}"></span>{{ ucfirst($monitor['estado']) }}</span>
+                                </div>
+                                <div class="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+                                    @if($monitor['codigo']) <span>HTTP {{ $monitor['codigo'] }}</span> · <span>{{ $monitor['latencia_ms'] }} ms</span> · @endif
+                                    <span>{{ $monitor['ultima_comprobacion'] ? \Carbon\Carbon::parse($monitor['ultima_comprobacion'])->diffForHumans() : 'Sin comprobar' }}</span>
+                                    <form method="POST" action="{{ route('monitoreo.check', $monitor['id']) }}" class="ml-auto">@csrf<button class="rounded-md border border-white/10 px-2 py-1 text-gray-300 hover:bg-white/10">Comprobar</button></form>
+                                    <form method="POST" action="{{ route('monitoreo.destroy', $monitor['id']) }}">@csrf @method('DELETE')<button class="rounded-md border border-red-400/20 px-2 py-1 text-red-300 hover:bg-red-400/10">Eliminar</button></form>
+                                </div>
+                            </div>
+                        @empty
+                            <p class="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">Todavía no hay monitores configurados.</p>
+                        @endforelse
+                    </div>
+                </article>
             </section>
 
             <section class="mt-6 grid gap-6 xl:grid-cols-[1.5fr_1fr]">
                 <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
                     <div class="flex items-center justify-between">
-                        <div><h2 class="font-display text-lg font-bold">Rendimiento del sistema</h2><p class="mt-1 text-xs text-gray-500">Datos de ejemplo para la futura conexión del proyecto.</p></div>
-                        <span class="font-mono2 text-xs text-gray-600">30 días</span>
+                        <div><h2 class="font-display text-lg font-bold">Siguiente etapa</h2><p class="mt-1 text-xs text-gray-500">La conexión SSH permitirá revisar recursos y servicios del VPS.</p></div>
+                        <span class="font-mono2 text-xs text-gray-600">VPS KVM</span>
                     </div>
-                    <div class="mt-8 flex h-48 items-end gap-2 border-b border-l border-white/10 px-3">
-                        @foreach([35, 48, 42, 58, 51, 66, 61, 72, 65, 78, 70, 82, 74, 88, 80, 91, 84, 76, 87, 79] as $height)
-                            <div class="flex-1 rounded-t bg-gradient-to-t from-[#d61f2c]/30 to-[#ff5b5b]" style="height: {{ $height }}%"></div>
-                        @endforeach
+                    <div class="mt-8 flex h-48 items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/20 px-6 text-center">
+                        <p class="max-w-sm text-sm leading-relaxed text-gray-500">Aquí se mostrarán las métricas históricas de latencia y disponibilidad cuando haya monitores con comprobaciones registradas.</p>
                     </div>
-                    <div class="mt-3 flex justify-between font-mono2 text-[10px] text-gray-600"><span>Hace 30 días</span><span>Hoy</span></div>
+                    <div class="mt-3 flex justify-between font-mono2 text-[10px] text-gray-600"><span>Histórico</span><span>Próximamente</span></div>
                 </article>
                 <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
                     <h2 class="font-display text-lg font-bold">Resumen de conexión</h2>
@@ -112,7 +141,7 @@
             </section>
 
             <div class="mt-6 rounded-2xl border border-dashed border-yellow-400/20 bg-yellow-400/5 p-5 text-sm text-yellow-200/80">
-                Estos valores son únicamente visuales. El monitoreo real se habilitará cuando conectes el repositorio, el entorno y las fuentes de métricas.
+                El monitoreo HTTP ya está disponible. El monitoreo profundo del VPS (CPU, RAM, disco, procesos y logs) se conectará cuando configuremos el acceso SSH del cliente.
             </div>
         </main>
     </div>

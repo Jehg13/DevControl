@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Services\DevControlAlertService;
 
 class Proyecto extends Model
 {
@@ -30,6 +31,22 @@ class Proyecto extends Model
         'fecha_meta' => 'date',
         'progreso' => 'integer',
     ];
+
+    protected static function booted(): void
+    {
+        static::created(function (Proyecto $proyecto): void {
+            Actividad::registrar('Proyecto creado', "Se registró el proyecto: {$proyecto->nombre}.", $proyecto);
+            app(DevControlAlertService::class)->send(
+                'Nuevo proyecto registrado',
+                $proyecto->nombre,
+                $proyecto,
+                [
+                    'Estado' => $proyecto->estado,
+                    'Repositorio' => $proyecto->repositorio_url ?: 'No configurado',
+                ]
+            );
+        });
+    }
 
     /*
     |--------------------------------------------------------------------------

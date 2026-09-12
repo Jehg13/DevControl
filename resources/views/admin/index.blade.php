@@ -174,7 +174,7 @@
                         </svg>
                     </button>
 
-                    <a href="#"
+                    <a href="{{ route('proyectos.index') }}"
                        class="flex items-center gap-2 rounded-xl bg-[#d61f2c] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#b8161f]">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M12 5v14M5 12h14"/>
@@ -190,31 +190,31 @@
 
                 <div class="rounded-xl border border-white/10 bg-[#0f0f11] p-4">
                     <p class="font-mono2 text-[11px] uppercase tracking-widest text-gray-500">Proyectos</p>
-                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['proyectos'] ?? 4 }}</p>
+                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['proyectos'] }}</p>
                     <p class="text-xs text-gray-500">Activos</p>
                 </div>
 
                 <div class="rounded-xl border border-white/10 bg-[#0f0f11] p-4">
                     <p class="font-mono2 text-[11px] uppercase tracking-widest text-gray-500">Pendientes</p>
-                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['pendientes'] ?? 18 }}</p>
+                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['pendientes'] }}</p>
                     <p class="text-xs text-gray-500">Tareas por hacer</p>
                 </div>
 
                 <div class="rounded-xl border border-white/10 bg-[#0f0f11] p-4">
                     <p class="font-mono2 text-[11px] uppercase tracking-widest text-gray-500">En proceso</p>
-                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['en_progreso'] ?? 7 }}</p>
+                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['en_progreso'] }}</p>
                     <p class="text-xs text-gray-500">Tareas activas</p>
                 </div>
 
                 <div class="rounded-xl border border-white/10 bg-[#0f0f11] p-4">
                     <p class="font-mono2 text-[11px] uppercase tracking-widest text-gray-500">Completadas</p>
-                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['completados'] ?? 32 }}</p>
+                    <p class="font-display mt-1 text-3xl font-bold text-white">{{ $resumen['completados'] }}</p>
                     <p class="text-xs text-gray-500">Este mes</p>
                 </div>
 
                 <div class="rounded-xl border border-[#d61f2c]/30 bg-[#d61f2c]/5 p-4">
                     <p class="font-mono2 text-[11px] uppercase tracking-widest text-[#ff5b5b]/80">Bugs</p>
-                    <p class="font-display mt-1 text-3xl font-bold text-[#ff5b5b]">{{ $resumen['bugs'] ?? 3 }}</p>
+                    <p class="font-display mt-1 text-3xl font-bold text-[#ff5b5b]">{{ $resumen['bugs'] }}</p>
                     <p class="text-xs text-[#ff5b5b]/70">Abiertos</p>
                 </div>
 
@@ -236,39 +236,33 @@
                             </div>
                             <h2 class="font-display text-lg font-bold text-white">Mis proyectos</h2>
                         </div>
-                        <a href="#" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todos</a>
+                        <a href="{{ route('proyectos.index') }}" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todos</a>
                     </div>
 
-                    @php
-                        $proyectos = [
-                            ['nombre' => 'TicketPro', 'progreso' => 60, 'pendientes' => 8, 'actualizaciones' => 9, 'completados' => 10, 'bugs' => 2],
-                            ['nombre' => 'Sistema de Solicitudes', 'progreso' => 35, 'pendientes' => 12, 'actualizaciones' => 4, 'completados' => 6, 'bugs' => 1],
-                            ['nombre' => 'Dashboard TI', 'progreso' => 15, 'pendientes' => 9, 'actualizaciones' => 2, 'completados' => 1, 'bugs' => 0],
-                        ];
-                    @endphp
-
                     <div class="mt-4 space-y-3">
-                        @foreach ($proyectos as $proyecto)
-                            <a href="#"
+                        @forelse ($proyectos as $proyecto)
+                            <a href="{{ route('proyectos.show', $proyecto) }}"
                                class="block rounded-xl border border-white/10 bg-black/40 p-4 transition hover:border-white/20">
 
                                 <div class="flex items-center justify-between">
-                                    <p class="font-semibold text-white">{{ $proyecto['nombre'] }}</p>
-                                    <span class="font-mono2 text-xs font-bold text-[#ff5b5b]">{{ $proyecto['progreso'] }}%</span>
+                                    <p class="font-semibold text-white">{{ $proyecto->nombre }}</p>
+                                    <span class="font-mono2 text-xs font-bold text-[#ff5b5b]">{{ $proyecto->progreso }}%</span>
                                 </div>
 
                                 <div class="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                                    <div class="h-full rounded-full bg-gradient-to-r from-[#d61f2c] to-[#ff5b5b]" style="width: {{ $proyecto['progreso'] }}%"></div>
+                                    <div class="h-full rounded-full bg-gradient-to-r from-[#d61f2c] to-[#ff5b5b]" style="width: {{ $proyecto->progreso }}%"></div>
                                 </div>
 
                                 <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono2 text-[11px] text-gray-500">
-                                    <span>{{ $proyecto['pendientes'] }} pendientes</span>
-                                    <span>{{ $proyecto['actualizaciones'] }} actualizaciones</span>
-                                    <span>{{ $proyecto['completados'] }} completados</span>
-                                    <span class="{{ $proyecto['bugs'] > 0 ? 'text-[#ff5b5b]' : '' }}">{{ $proyecto['bugs'] }} bugs</span>
+                                    <span>{{ $proyecto->pendientes_count }} pendientes</span>
+                                    <span>{{ $proyecto->actualizaciones_count }} actualizaciones</span>
+                                    <span>{{ $proyecto->completados_count }} completados</span>
+                                    <span class="{{ $proyecto->bugs_count > 0 ? 'text-[#ff5b5b]' : '' }}">{{ $proyecto->bugs_count }} bugs</span>
                                 </div>
                             </a>
-                        @endforeach
+                        @empty
+                            <p class="py-5 text-sm text-gray-500">Todavía no hay proyectos registrados.</p>
+                        @endforelse
                     </div>
                 </div>
 
@@ -286,29 +280,22 @@
                             </div>
                             <h2 class="font-display text-lg font-bold text-white">Tareas próximas</h2>
                         </div>
-                        <a href="#" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todas</a>
+                        <a href="{{ route('tareas.index') }}" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todas</a>
                     </div>
 
-                    @php
-                        $tareasProximas = [
-                            ['titulo' => 'Confirmar los roles de usuario', 'proyecto' => 'TicketPro', 'vence' => 'Hoy', 'prioridad' => 'alta'],
-                            ['titulo' => 'Revisar permisos con TI', 'proyecto' => 'Dashboard TI', 'vence' => 'Mañana', 'prioridad' => 'alta'],
-                            ['titulo' => 'Definir recuperación de contraseña', 'proyecto' => 'TicketPro', 'vence' => 'En 2 días', 'prioridad' => 'media'],
-                            ['titulo' => 'Documentar endpoints de la API', 'proyecto' => 'Sistema de Solicitudes', 'vence' => 'En 3 días', 'prioridad' => 'media'],
-                        ];
-                    @endphp
-
                     <div class="mt-4 divide-y divide-white/5">
-                        @foreach ($tareasProximas as $tarea)
+                        @forelse ($tareasProximas as $tarea)
                             <div class="flex items-start gap-3 py-3 first:pt-0">
-                                <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {{ $tarea['prioridad'] === 'alta' ? 'bg-[#ff5b5b]' : 'bg-gray-500' }}"></span>
+                                <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {{ $tarea->prioridad === 'Alta' ? 'bg-[#ff5b5b]' : 'bg-gray-500' }}"></span>
                                 <div class="min-w-0 flex-1">
-                                    <p class="truncate text-sm font-semibold text-white">{{ $tarea['titulo'] }}</p>
-                                    <p class="mt-0.5 font-mono2 text-[11px] text-gray-500">{{ $tarea['proyecto'] }}</p>
+                                    <p class="truncate text-sm font-semibold text-white">{{ $tarea->titulo }}</p>
+                                    <p class="mt-0.5 font-mono2 text-[11px] text-gray-500">{{ $tarea->proyecto?->nombre ?? 'Sin proyecto' }}</p>
                                 </div>
-                                <span class="shrink-0 font-mono2 text-[11px] text-gray-500">{{ $tarea['vence'] }}</span>
+                                <span class="shrink-0 font-mono2 text-[11px] text-gray-500">{{ $tarea->fecha_limite->isToday() ? 'Hoy' : ($tarea->fecha_limite->isTomorrow() ? 'Mañana' : $tarea->fecha_limite->format('d/m')) }}</span>
                             </div>
-                        @endforeach
+                        @empty
+                            <p class="py-5 text-sm text-gray-500">No hay tareas próximas a vencer.</p>
+                        @endforelse
                     </div>
                 </div>
 
@@ -326,30 +313,21 @@
                         <h2 class="font-display text-lg font-bold text-white">Actividad reciente</h2>
                     </div>
 
-                    @php
-                        $actividad = [
-                            ['hora' => '19:30', 'texto' => 'Creaste el proyecto TicketPro', 'tipo' => 'default'],
-                            ['hora' => '19:45', 'texto' => 'Creaste la tarea "Sistema de avisos"', 'tipo' => 'default'],
-                            ['hora' => '20:10', 'texto' => 'Completaste "Autenticación"', 'tipo' => 'completado'],
-                            ['hora' => '20:25', 'texto' => 'Registraste BUG-004', 'tipo' => 'bug'],
-                            ['hora' => '20:40', 'texto' => 'Subiste TicketPro-v0.6.zip', 'tipo' => 'default'],
-                        ];
-                    @endphp
-
                     <div class="mt-4">
-                        @foreach ($actividad as $item)
+                        @forelse ($actividad as $item)
                             <div class="relative flex gap-3 pb-4 last:pb-0">
                                 @if (!$loop->last)
                                     <span class="absolute left-[5px] top-3 h-full w-px bg-white/10"></span>
                                 @endif
-                                <span class="relative mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full
-                                    {{ $item['tipo'] === 'bug' ? 'bg-[#ff5b5b]' : ($item['tipo'] === 'completado' ? 'bg-white' : 'bg-gray-600') }}"></span>
+                                <span class="relative mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full {{ str_contains(strtolower($item->accion), 'bug') ? 'bg-[#ff5b5b]' : 'bg-gray-600' }}"></span>
                                 <div class="flex flex-1 items-baseline justify-between gap-3 text-sm">
-                                    <p class="text-gray-300">{{ $item['texto'] }}</p>
-                                    <span class="shrink-0 font-mono2 text-[11px] text-gray-600">{{ $item['hora'] }}</span>
+                                    <p class="text-gray-300">{{ $item->descripcion }}</p>
+                                    <span class="shrink-0 font-mono2 text-[11px] text-gray-600">{{ $item->created_at->format('H:i') }}</span>
                                 </div>
                             </div>
-                        @endforeach
+                        @empty
+                            <p class="py-5 text-sm text-gray-500">Todavía no hay actividad registrada.</p>
+                        @endforelse
                     </div>
                 </div>
 
@@ -367,28 +345,22 @@
                             </div>
                             <h2 class="font-display text-lg font-bold text-white">Bugs abiertos</h2>
                         </div>
-                        <a href="#" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todos</a>
+                        <a href="{{ route('bugs.index') }}" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todos</a>
                     </div>
 
-                    @php
-                        $bugs = [
-                            ['folio' => 'BUG-004', 'titulo' => 'Error al subir archivos grandes', 'proyecto' => 'TicketPro', 'estado' => 'Investigando'],
-                            ['folio' => 'BUG-003', 'titulo' => 'Ícono no se muestra en móvil', 'proyecto' => 'Dashboard TI', 'estado' => 'En desarrollo'],
-                            ['folio' => 'BUG-002', 'titulo' => 'Timeout al iniciar sesión', 'proyecto' => 'Sistema de Solicitudes', 'estado' => 'En pruebas'],
-                        ];
-                    @endphp
-
                     <div class="mt-4 space-y-2.5">
-                        @foreach ($bugs as $bug)
+                        @forelse ($bugs as $bug)
                             <div class="rounded-lg border border-white/10 bg-black/40 p-3">
                                 <div class="flex items-center justify-between gap-2">
-                                    <span class="font-mono2 text-[11px] font-bold text-[#ff5b5b]">{{ $bug['folio'] }}</span>
-                                    <span class="rounded-full bg-white/5 px-2 py-0.5 font-mono2 text-[10px] font-semibold text-gray-400">{{ $bug['estado'] }}</span>
+                                    <span class="font-mono2 text-[11px] font-bold text-[#ff5b5b]">{{ $bug->folio }}</span>
+                                    <span class="rounded-full bg-white/5 px-2 py-0.5 font-mono2 text-[10px] font-semibold text-gray-400">{{ $bug->estado }}</span>
                                 </div>
-                                <p class="mt-1.5 text-sm font-semibold text-white">{{ $bug['titulo'] }}</p>
-                                <p class="mt-0.5 text-xs text-gray-500">{{ $bug['proyecto'] }}</p>
+                                <p class="mt-1.5 text-sm font-semibold text-white">{{ $bug->titulo }}</p>
+                                <p class="mt-0.5 text-xs text-gray-500">{{ $bug->proyecto?->nombre ?? 'Sin proyecto' }}</p>
                             </div>
-                        @endforeach
+                        @empty
+                            <p class="py-5 text-sm text-gray-500">No hay bugs abiertos.</p>
+                        @endforelse
                     </div>
                 </div>
 
@@ -404,42 +376,34 @@
                                     <path d="M9 12h6"/>
                                 </svg>
                             </div>
-                            <h2 class="font-display text-lg font-bold text-white">Archivos recientes</h2>
+                            <h2 class="font-display text-lg font-bold text-white">Actualizaciones recientes</h2>
                         </div>
-                        <a href="#" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todos</a>
+                        <a href="{{ route('actualizaciones') }}" class="text-sm font-bold text-[#ff5b5b] hover:text-[#ff7a7a]">Ver todos</a>
                     </div>
-
-                    @php
-                        $archivos = [
-                            ['nombre' => 'tiketpro.sql', 'carpeta' => 'Bases de datos', 'proyecto' => 'TicketPro', 'peso' => '2.4 MB', 'fecha' => 'hace 1 día'],
-                            ['nombre' => 'TicketPro-v1.zip', 'carpeta' => 'Backups', 'proyecto' => 'TicketPro', 'peso' => '18 MB', 'fecha' => 'hace 3 días'],
-                            ['nombre' => 'manual.pdf', 'carpeta' => 'Documentación', 'proyecto' => 'Sistema de Solicitudes', 'peso' => '1.1 MB', 'fecha' => 'hace 5 días'],
-                            ['nombre' => 'login.png', 'carpeta' => 'Diseños', 'proyecto' => 'DevControl', 'peso' => '340 KB', 'fecha' => 'hace 6 días'],
-                        ];
-                    @endphp
 
                     <div class="mt-4 overflow-x-auto">
                         <table class="w-full min-w-[480px] text-left text-sm">
                             <thead>
                                 <tr class="font-mono2 text-[11px] uppercase tracking-wide text-gray-600">
-                                    <th class="pb-3 font-semibold">Archivo</th>
+                                    <th class="pb-3 font-semibold">Título</th>
                                     <th class="pb-3 font-semibold">Proyecto</th>
-                                    <th class="pb-3 font-semibold">Peso</th>
-                                    <th class="pb-3 font-semibold">Subido</th>
+                                    <th class="pb-3 font-semibold">Tipo</th>
+                                    <th class="pb-3 font-semibold">Fecha</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-white/5">
-                                @foreach ($archivos as $archivo)
+                                @forelse ($actualizaciones as $actualizacion)
                                     <tr>
                                         <td class="py-2.5">
-                                            <p class="font-semibold text-white">{{ $archivo['nombre'] }}</p>
-                                            <p class="font-mono2 text-[11px] text-gray-600">{{ $archivo['carpeta'] }}</p>
+                                            <p class="font-semibold text-white">{{ $actualizacion->titulo }}</p>
                                         </td>
-                                        <td class="py-2.5 text-gray-400">{{ $archivo['proyecto'] }}</td>
-                                        <td class="py-2.5 font-mono2 text-xs text-gray-500">{{ $archivo['peso'] }}</td>
-                                        <td class="py-2.5 font-mono2 text-xs text-gray-500">{{ $archivo['fecha'] }}</td>
+                                        <td class="py-2.5 text-gray-400">{{ $actualizacion->proyecto?->nombre ?? 'Sin proyecto' }}</td>
+                                        <td class="py-2.5 font-mono2 text-xs text-gray-500">{{ $actualizacion->tipo ?? 'Actualización' }}</td>
+                                        <td class="py-2.5 font-mono2 text-xs text-gray-500">{{ $actualizacion->created_at->diffForHumans() }}</td>
                                     </tr>
-                                @endforeach
+                                @empty
+                                    <tr><td colspan="4" class="py-5 text-center text-sm text-gray-500">No hay actualizaciones registradas.</td></tr>
+                                @endforelse
                             </tbody>
                         </table>
                     </div>
@@ -459,23 +423,15 @@
                         <h2 class="font-display text-lg font-bold text-white">Esta semana</h2>
                     </div>
 
-                    @php
-                        $semana = [
-                            ['dia' => 'Lun', 'tarea' => 'Crear avisos'],
-                            ['dia' => 'Mar', 'tarea' => 'Sistema de solicitudes'],
-                            ['dia' => 'Mié', 'tarea' => 'Dashboard TI'],
-                            ['dia' => 'Jue', 'tarea' => 'Pruebas'],
-                            ['dia' => 'Vie', 'tarea' => 'Correcciones'],
-                        ];
-                    @endphp
-
                     <div class="mt-4 space-y-2">
-                        @foreach ($semana as $dia)
+                        @forelse ($tareasSemana as $tarea)
                             <div class="flex items-center gap-3 rounded-lg border border-white/10 bg-black/40 px-3 py-2.5">
-                                <span class="flex h-7 w-9 shrink-0 items-center justify-center rounded-md bg-white/5 font-mono2 text-[11px] font-bold text-gray-300">{{ $dia['dia'] }}</span>
-                                <span class="text-sm text-gray-300">{{ $dia['tarea'] }}</span>
+                                <span class="flex h-7 w-9 shrink-0 items-center justify-center rounded-md bg-white/5 font-mono2 text-[11px] font-bold text-gray-300">{{ $tarea->fecha_limite->format('D') }}</span>
+                                <span class="truncate text-sm text-gray-300">{{ $tarea->titulo }}</span>
                             </div>
-                        @endforeach
+                        @empty
+                            <p class="py-5 text-sm text-gray-500">No hay tareas con fecha límite esta semana.</p>
+                        @endforelse
                     </div>
                 </div>
 

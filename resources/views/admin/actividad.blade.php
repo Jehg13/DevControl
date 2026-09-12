@@ -30,11 +30,11 @@
             <button type="button" onclick="toggleSidebar()" class="mb-5 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 lg:hidden" aria-label="Abrir navegación">☰</button>
             <header class="flex flex-col gap-4 border-b border-white/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
                 <div><p class="font-mono2 text-xs text-gray-500">~ / actividad</p><h1 class="mt-2 font-display text-3xl font-bold">Actividad</h1><p class="mt-2 text-sm text-gray-500">Historial de acciones realizadas por usuarios y por DevControl.</p></div>
-                <span class="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-2 font-mono2 text-xs text-yellow-300">Modo demostración</span>
+                <span class="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 font-mono2 text-xs text-emerald-300">Auditoría activa</span>
             </header>
 
             <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                @foreach([['Acciones hoy', '24', 'Actividad registrada', 'text-cyan-300'], ['Usuarios activos', '4', 'Participaron hoy', 'text-purple-300'], ['Acciones de DevControl', '11', 'Procesos automáticos', 'text-[#ff6b6b]'], ['Alertas', '2', 'Requieren atención', 'text-yellow-300']] as $metric)
+                @foreach([['Acciones hoy', $metricas['hoy'], 'Actividad registrada', 'text-cyan-300'], ['Acciones de usuarios', $metricas['usuarios'], 'Participaron hoy', 'text-purple-300'], ['Acciones de DevControl', $metricas['sistema'], 'Procesos automáticos', 'text-[#ff6b6b]'], ['Historial total', $metricas['total'], 'Eventos registrados', 'text-yellow-300']] as $metric)
                     <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5"><p class="font-mono2 text-[10px] uppercase tracking-widest text-gray-500">{{ $metric[0] }}</p><p class="mt-4 font-display text-3xl font-bold {{ $metric[3] }}">{{ $metric[1] }}</p><p class="mt-2 text-xs text-gray-600">{{ $metric[2] }}</p></article>
                 @endforeach
             </div>
@@ -43,15 +43,12 @@
                 <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 class="font-display text-lg font-bold">Historial reciente</h2><p class="mt-1 text-xs text-gray-500">Acciones de usuarios y eventos automáticos.</p></div><span class="font-mono2 text-xs text-gray-600">Últimas 24 horas</span></div>
                     <div class="mt-5 space-y-4">
-                        @foreach([
-                            ['Jesús Guerra', 'actualizó el estado de un bug', 'Bug #18 · En pruebas', 'Hace 8 min', 'Usuario', 'text-cyan-300'],
-                            ['DevControl', 'detectó una funcionalidad pendiente', 'Proyecto DevControl · Análisis automático', 'Hace 22 min', 'Sistema', 'text-[#ff6b6b]'],
-                            ['María López', 'creó una nueva tarea', 'Integrar módulo de notificaciones', 'Hace 45 min', 'Usuario', 'text-purple-300'],
-                            ['DevControl', 'registró una actualización', 'Sincronización de repositorio', 'Hace 1 h', 'Sistema', 'text-[#ff6b6b]'],
-                            ['Jesús Guerra', 'consultó el módulo de incidentes', 'Navegación · Incidentes', 'Hace 2 h', 'Usuario', 'text-cyan-300'],
-                        ] as $event)
-                            <div class="flex gap-3 border-b border-white/5 pb-4 last:border-0 last:pb-0"><div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/5 font-mono2 text-xs {{ $event[5] }}">{{ strtoupper(substr($event[0], 0, 1)) }}</div><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><p class="text-sm font-semibold text-white">{{ $event[0] }}</p><span class="rounded-full bg-white/5 px-2 py-0.5 font-mono2 text-[9px] {{ $event[5] }}">{{ $event[4] }}</span></div><p class="mt-1 text-sm text-gray-400">{{ $event[1] }}</p><p class="mt-1 text-xs text-gray-600">{{ $event[2] }}</p></div><time class="shrink-0 font-mono2 text-[10px] text-gray-600">{{ $event[3] }}</time></div>
-                        @endforeach
+                        @forelse($actividades as $actividad)
+                            @php($color = $actividad->origen === 'DevControl' ? 'text-[#ff6b6b]' : 'text-cyan-300')
+                            <div class="flex gap-3 border-b border-white/5 pb-4 last:border-0 last:pb-0"><div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/5 font-mono2 text-xs {{ $color }}">{{ strtoupper(substr($actividad->usuario?->name ?? 'D', 0, 1)) }}</div><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><p class="text-sm font-semibold text-white">{{ $actividad->usuario?->name ?? 'DevControl' }}</p><span class="rounded-full bg-white/5 px-2 py-0.5 font-mono2 text-[9px] {{ $color }}">{{ $actividad->origen }}</span></div><p class="mt-1 text-sm text-gray-400">{{ $actividad->accion }}: {{ $actividad->descripcion }}</p><p class="mt-1 text-xs text-gray-600">{{ $actividad->proyecto?->nombre ?? 'Sistema' }}</p></div><time class="shrink-0 font-mono2 text-[10px] text-gray-600">{{ $actividad->created_at->diffForHumans() }}</time></div>
+                        @empty
+                            <p class="text-sm text-gray-500">Todavía no hay actividad registrada.</p>
+                        @endforelse
                     </div>
                 </article>
                 <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
@@ -65,7 +62,7 @@
                 </article>
             </section>
 
-            <div class="mt-6 rounded-2xl border border-dashed border-yellow-400/20 bg-yellow-400/5 p-5 text-sm text-yellow-200/80">Estos registros son visuales de demostración. La auditoría real se conectará posteriormente para guardar cada acción de usuarios y de DevControl.</div>
+            <div class="mt-6">{{ $actividades->links() }}</div>
         </main>
     </div>
     @include('admin.partials.asistente-flotante')

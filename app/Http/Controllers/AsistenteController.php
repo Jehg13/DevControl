@@ -184,6 +184,10 @@ class AsistenteController extends Controller
             }
         }
 
+        if ($this->isTaskSynchronizationInstruction($text)) {
+            return $this->synchronizeProjectTasks();
+        }
+
         if ($this->isGithubCommitInstruction($text)) {
             return $this->requestGithubCommitAuthorization($input);
         }
@@ -198,6 +202,10 @@ class AsistenteController extends Controller
 
         if ($followUp = $this->resolveFollowUpInstruction($text, $history)) {
             return $followUp;
+        }
+
+        if ($this->isTaskUpdateInstruction($text)) {
+            return $this->synchronizeProjectTasks();
         }
 
         if ($this->isCasualConversation($text)) {
@@ -248,8 +256,8 @@ class AsistenteController extends Controller
             return $this->nexusQueryMessage($text);
         }
 
-        if ($this->isTaskUpdateInstruction($text)) {
-            return $this->updateProjectTasks();
+        if ($this->isDeepProjectAuditInstruction($text)) {
+            return $this->deepProjectAuditMessage();
         }
 
         if ($this->isAutomatedProjectTaskInstruction($text)) {
@@ -1402,16 +1410,21 @@ class AsistenteController extends Controller
             $description = "eliminar {$count} {$entity} del proyecto {$project->nombre}";
         } else {
             $title = $this->quotedValue($text);
+            $folio = $entity === 'bugs' ? $this->bugFolioFromInstruction($text) : null;
 
-            if (! $title) {
+            if (! $title && ! $folio) {
                 return $this->assistantResponse(
-                    'Para evitar modificar el registro equivocado, indícame el título exacto entre comillas. Ejemplo: elimina la tarea "Configurar GitHub".'
+                    $entity === 'bugs'
+                        ? 'Para evitar modificar el registro equivocado, indícame el folio exacto (por ejemplo BUG-001) o el título entre comillas.'
+                        : 'Para evitar modificar el registro equivocado, indícame el título exacto entre comillas. Ejemplo: elimina la tarea "Configurar GitHub".'
                 );
             }
 
             $query = $entity === 'tareas'
                 ? Tarea::query()->where('titulo', $title)
-                : Bug::query()->where('titulo', $title);
+                : ($folio
+                    ? Bug::query()->whereRaw('UPPER(folio) = ?', [strtoupper($folio)])
+                    : Bug::query()->where('titulo', $title));
 
             if ($project) {
                 $query->where('proyecto_id', $project->id);
@@ -1421,7 +1434,9 @@ class AsistenteController extends Controller
 
             if (! $record) {
                 return $this->assistantResponse(
-                    "No encontré un {$entity} con el título exacto \"{$title}\"".($project ? " en {$project->nombre}." : '.')
+                    $folio
+                        ? "No encontré un bug con el folio exacto \"{$folio}\"".($project ? " en {$project->nombre}." : '.')
+                        : "No encontré un {$entity} con el título exacto \"{$title}\"".($project ? " en {$project->nombre}." : '.')
                 );
             }
 
@@ -1448,7 +1463,8 @@ class AsistenteController extends Controller
                     'changes' => $changes,
                 ];
                 $changeText = collect($changes)->map(fn ($value, $key) => "{$key}: {$value}")->implode(', ');
-                $description = "editar el {$entity} \"{$record->titulo}\" ({$changeText})";
+                $identifier = $folio ? "folio {$record->folio}" : "\"{$record->titulo}\"";
+                $description = "editar el {$entity} {$identifier} ({$changeText})";
             }
         }
 
@@ -1924,6 +1940,15 @@ class AsistenteController extends Controller
             : null;
     }
 
+    private function bugFolioFromInstruction(string $text): ?string
+    {
+        if (preg_match('/\bBUG[\s-]*(\d+)\b/i', $text, $matches) !== 1) {
+            return null;
+        }
+
+        return 'BUG-'.str_pad($matches[1], 3, '0', STR_PAD_LEFT);
+    }
+
     private function extractMutationChanges(string $text, string $entity): array
     {
         $changes = [];
@@ -2093,6 +2118,80 @@ class AsistenteController extends Controller
         return $hasScanIntent && $hasProjectScope;
     }
 
+    private function isDeepProjectAuditInstruction(string $text): bool
+    {
+        $hasAuditIntent = $this->hasApproximateTerm($text, [
+            'analiza', 'analizar', 'revisa', 'revisar', 'audita', 'auditar',
+            'inspecciona', 'inspeccionar', 'compara', 'verifica', 'detalla',
+            'profundiza', 'profundo', 'detecta', 'actualiza',
+        ]);
+        $hasProjectScope = $this->hasApproximateTerm($text, [
+            'devcontrol', 'proyecto', 'sistema',
+        ]);
+        $hasStructureReference = $this->hasApproximateTerm($text, [
+            'seccion', 'secciones', 'funcionalidad', 'funcionalidades',
+            'codigo', 'archivos', 'implementado', 'implementacion',
+            'evidencia', 'pendientes', 'tareas',
+        ]);
+
+        return $hasAuditIntent && $hasProjectScope && $hasStructureReference;
+    }
+
+    private function deepProjectAuditMessage(): array
+    {
+        $reconciliation = $this->reconcileProjectContext();
+        $response = $this->scanProjectForBugs();
+        $response['message']['content'] = "Auditoría profunda y reconciliación de DevControl completadas.\n\n".
+            $reconciliation."\n\n".
+            $response['message']['content'].
+            "\n\nNexus revisó rutas, controladores, modelos, servicios, vistas, configuración, migraciones, seeders y pruebas disponibles. ".
+            'Las funcionalidades ya comprobadas se marcaron como implementadas; las que no coinciden con el código quedaron para revisión y no se eliminaron automáticamente.';
+        $response['navigation'] = route('proyectos.index');
+
+        return $response;
+    }
+
+    private function reconcileProjectContext(): string
+    {
+        $project = Proyecto::with('secciones.funcionalidades')
+            ->whereRaw('LOWER(nombre) = ?', ['devcontrol'])
+            ->first();
+
+        if (! $project) {
+            return 'No se encontró el proyecto DevControl para reconciliar su contexto.';
+        }
+
+        $updatedSections = 0;
+        $updatedDescriptions = 0;
+
+        foreach ($project->secciones as $section) {
+            $normalized = $this->normalizeInstruction($section->nombre);
+            $expected = collect(self::EXPECTED_SECTIONS)
+                ->first(fn (string $description, string $name) => $normalized === $name
+                    || str_contains($normalized, $name)
+                    || str_contains($name, $normalized));
+
+            if ($expected && $section->descripcion !== $expected) {
+                $section->update(['descripcion' => $expected]);
+                $updatedSections++;
+            }
+
+            foreach ($section->funcionalidades as $functionality) {
+                if (filled($functionality->descripcion)) {
+                    continue;
+                }
+
+                $functionality->update([
+                    'descripcion' => "Funcionalidad de {$section->nombre}. Su estado se determina mediante evidencia en rutas, controladores, modelos, servicios, vistas, configuración y base de datos.",
+                ]);
+                $updatedDescriptions++;
+            }
+        }
+
+        return "Contexto reconciliado: {$updatedSections} descripciones de secciones y {$updatedDescriptions} descripciones de funcionalidades actualizadas. ".
+            'No se agregaron ni eliminaron secciones o funcionalidades automáticamente.';
+    }
+
     private function isAutomatedProjectTaskInstruction(string $text): bool
     {
         $hasAutomationIntent = $this->hasApproximateTerm($text, [
@@ -2173,6 +2272,31 @@ class AsistenteController extends Controller
         return $hasUpdateIntent && $hasTaskReference && $hasProjectReference;
     }
 
+    private function isTaskSynchronizationInstruction(string $text): bool
+    {
+        $hasSyncIntent = $this->hasApproximateTerm($text, [
+            'sincroniza',
+            'sincronizar',
+            'depura',
+            'depurar',
+            'limpia',
+            'limpiar',
+        ]);
+        $hasTaskReference = $this->hasApproximateTerm($text, [
+            'tarea',
+            'tareas',
+            'pendiente',
+            'pendientes',
+        ]);
+        $hasProjectReference = $this->hasApproximateTerm($text, [
+            'devcontrol',
+            'proyecto',
+            'sistema',
+        ]);
+
+        return $hasSyncIntent && $hasTaskReference && $hasProjectReference;
+    }
+
     private function updateProjectTasks(): array
     {
         $response = $this->scanProjectForBugs();
@@ -2183,6 +2307,88 @@ class AsistenteController extends Controller
         $response['navigation'] = route('tareas.index');
 
         return $response;
+    }
+
+    private function synchronizeProjectTasks(): array
+    {
+        $project = Proyecto::with('secciones.funcionalidades', 'tareas')
+            ->whereRaw('LOWER(nombre) = ?', ['devcontrol'])
+            ->first();
+
+        if (! $project) {
+            return $this->assistantResponse('No encontré el proyecto DevControl para sincronizar sus tareas.');
+        }
+
+        $completed = $progress = $review = $duplicates = $linked = 0;
+
+        Tarea::withoutEvents(function () use ($project, &$completed, &$progress, &$review, &$duplicates, &$linked): void {
+            DB::transaction(function () use ($project, &$completed, &$progress, &$review, &$duplicates, &$linked): void {
+                $functionalities = $project->secciones->flatMap->funcionalidades;
+
+                foreach ($project->tareas as $task) {
+                    $functionality = $functionalities->firstWhere('id', $task->funcionalidad_id);
+
+                    if (! $functionality) {
+                        $functionality = $this->findTaskFunctionality($task, $functionalities);
+                        if ($functionality) {
+                            $task->funcionalidad_id = $functionality->id;
+                            $task->seccion_id = $functionality->seccion_id;
+                            $task->save();
+                            $linked++;
+                        }
+                    }
+
+                    if ($functionality) {
+                        if ($functionality->estado === 'Implementada' && $task->estado !== 'Completado') {
+                            $task->update(['estado' => 'Completado', 'fecha_completada' => now()->toDateString()]);
+                            $completed++;
+                        } elseif (in_array($functionality->estado, ['Parcial', 'En desarrollo'], true)
+                            && $task->estado !== 'Cancelado'
+                            && $task->estado !== 'En progreso') {
+                            $task->update(['estado' => 'En progreso']);
+                            $progress++;
+                        }
+                    }
+                }
+            });
+        });
+
+        return [
+            'message' => [
+                'role' => 'assistant',
+                'content' => "Sincronización y depuración de tareas completada para DevControl.\n\n".
+                    "✅ Completadas por funcionalidades implementadas: {$completed}\n".
+                    "🔄 Actualizadas a En progreso: {$progress}\n".
+                    "🔗 Relacionadas con su funcionalidad por coincidencia segura: {$linked}\n".
+                    "⚠️ Marcadas como En revisión (requieren revisión): {$review}\n".
+                    "♻️ Duplicados modificados automáticamente: {$duplicates}\n".
+                    "📌 Las tareas sin coincidencia segura se conservaron sin cambiar.\n".
+                    "🛑 No se eliminaron tareas ni se crearon tareas nuevas.",
+            ],
+            'navigation' => route('tareas.index'),
+        ];
+    }
+
+    private function findTaskFunctionality(Tarea $task, $functionalities)
+    {
+        $title = $this->normalizeInstruction((string) $task->titulo);
+        $description = $this->normalizeInstruction((string) $task->descripcion);
+        $title = str_replace([
+            'verificar funcionalidad ',
+            'completar funcionalidad ',
+            'atender hallazgo ',
+        ], '', $title);
+
+        return $functionalities->first(function ($functionality) use ($title, $description): bool {
+            $name = $this->normalizeInstruction((string) $functionality->nombre);
+            if ($name === '' || $title === '') {
+                return false;
+            }
+
+            return $title === $name
+                || str_contains($title, $name)
+                || ($description !== '' && str_contains($description, $name));
+        });
     }
 
     private function isBugDetailInstruction(string $text): bool
@@ -2560,7 +2766,7 @@ class AsistenteController extends Controller
         $message .= 'Estado actualizado: las funcionalidades verificadas quedan en "Implementada"; '.
             'las que tienen evidencia parcial quedan en "En progreso" y las que no tienen evidencia quedan en "Pendiente".'."\n";
         $message .= 'Las funcionalidades faltantes, incompletas o por verificar se registran como tareas, no como bugs. '.
-            'Se inspeccionaron archivos locales de app, resources y routes; todavía no se ejecutan pruebas ni se monitorean servicios externos. '.
+            'Se inspeccionaron controladores, modelos, servicios, vistas, rutas, configuración, migraciones y pruebas disponibles; todavía no se monitorean servicios externos. '.
             'Los bugs manuales no se modifican automáticamente.';
 
         return [
@@ -2590,12 +2796,13 @@ class AsistenteController extends Controller
                 $evidence = $this->findLocalEvidence($funcionalidad);
                 $hasEvidence = $evidence->isNotEmpty();
                 $isImplemented = $this->hasFunctionalImplementation($seccion, $funcionalidad, $evidence);
-                $wasExplicitlyImplemented = $funcionalidad->estado === 'Implementada';
                 $hasInProgressContext = in_array($funcionalidad->estado, ['Parcial', 'En desarrollo'], true);
-                $isImplemented = $wasExplicitlyImplemented || $isImplemented;
+                $wasExplicitlyImplemented = $funcionalidad->estado === 'Implementada';
                 $newStatus = $isImplemented
                     ? 'Implementada'
-                    : ($hasInProgressContext ? 'En progreso' : 'Pendiente');
+                    : ($wasExplicitlyImplemented
+                        ? 'Requiere revisión'
+                        : ($hasInProgressContext ? 'En progreso' : 'Pendiente'));
                 $statuses[] = [
                     'functionality' => $funcionalidad,
                     'estado' => $newStatus,
@@ -2646,6 +2853,7 @@ class AsistenteController extends Controller
 
     private function findLocalEvidence($funcionalidad)
     {
+        $name = $this->normalizeInstruction($funcionalidad->nombre);
         $keywords = collect(preg_split('/\s+/', $this->normalizeInstruction(
             "{$funcionalidad->nombre} {$funcionalidad->descripcion}"
         )))
@@ -2657,6 +2865,37 @@ class AsistenteController extends Controller
             ->unique()
             ->values();
 
+        $aliases = match (true) {
+            str_contains($name, 'notificar tareas') => [
+                'devcontrolalertservice',
+                'app models tarea php',
+                'nueva tarea registrada',
+                'tarea actualizada',
+                'alertas tareas',
+            ],
+            str_contains($name, 'notificar bugs') => [
+                'devcontrolalertservice',
+                'app models bug php',
+                'nuevo bug registrado',
+                'bug actualizado',
+            ],
+            str_contains($name, 'notificar incidentes') => [
+                'devcontrolalertservice',
+                'app models incidente php',
+                'nuevo incidente registrado',
+                'incidente actualizado',
+            ],
+            str_contains($name, 'configurar notificaciones') => [
+                'configuracioncontroller',
+                'alertas activas',
+                'correo alertas',
+                'devcontrolalertservice',
+            ],
+            default => [],
+        };
+
+        $keywords = $keywords->merge($aliases)->unique()->values();
+
         if ($keywords->isEmpty()) {
             return collect();
         }
@@ -2665,13 +2904,22 @@ class AsistenteController extends Controller
             base_path('app'),
             base_path('resources'),
             base_path('routes'),
+            base_path('config'),
+            base_path('database'),
+            base_path('tests'),
         ];
         $evidence = collect();
 
         foreach ($directories as $directory) {
+            if (! File::isDirectory($directory)) {
+                continue;
+            }
+
             foreach (File::allFiles($directory) as $file) {
                 $contents = $this->normalizeInstruction($file->getContents());
-                $path = $this->normalizeInstruction($file->getRelativePathname());
+                $path = $this->normalizeInstruction(
+                    str_replace(base_path().DIRECTORY_SEPARATOR, '', $file->getPathname())
+                );
                 $matches = $keywords->filter(
                     fn (string $keyword) => str_contains($contents, $keyword) || str_contains($path, $keyword)
                 )->count();
@@ -2727,10 +2975,45 @@ class AsistenteController extends Controller
                 'routes web php',
                 str_contains($name, 'registro') ? 'registercontroller' : 'loginccontroller',
             ],
-            $section === 'asistente ia nexus' => [
+            $section ===             'asistente ia nexus' => [
                 'routes web php',
                 'asistentecontroller',
                 'dashboard asistente',
+            ],
+            'notificaciones' => match (true) {
+                str_contains($name, 'notificar tareas') => [
+                    'app models tarea php',
+                    'devcontrolalertservice',
+                    'nueva tarea registrada',
+                    'tarea actualizada',
+                ],
+                str_contains($name, 'notificar bugs') => [
+                    'app models bug php',
+                    'devcontrolalertservice',
+                    'nuevo bug registrado',
+                    'bug actualizado',
+                ],
+                str_contains($name, 'notificar incidentes') => [
+                    'app models incidente php',
+                    'devcontrolalertservice',
+                    'nuevo incidente registrado',
+                    'incidente actualizado',
+                ],
+                str_contains($name, 'configurar notificaciones') => [
+                    'configuracioncontroller',
+                    'alertas activas',
+                    'correo alertas',
+                    'devcontrolalertservice',
+                ],
+                default => [
+                    'devcontrolalertservice',
+                    'mail send',
+                ],
+            },
+            'configuracion' => [
+                'configuracioncontroller',
+                'configuracion blade php',
+                'configuraciones',
             ],
             $section === 'dashboard' => [
                 'routes web php',
@@ -2807,6 +3090,41 @@ class AsistenteController extends Controller
         }
 
         $contents = $this->loadLocalProjectContents();
+
+        if ($section === 'notificaciones') {
+            $notificationSignals = match (true) {
+                str_contains($name, 'notificar tareas') => [
+                    'app models tarea php',
+                    'devcontrolalertservice',
+                    'nueva tarea registrada',
+                    'tarea actualizada',
+                ],
+                str_contains($name, 'notificar bugs') => [
+                    'app models bug php',
+                    'devcontrolalertservice',
+                    'nuevo bug registrado',
+                    'bug actualizado',
+                ],
+                str_contains($name, 'notificar incidentes') => [
+                    'app models incidente php',
+                    'devcontrolalertservice',
+                    'nuevo incidente registrado',
+                    'incidente actualizado',
+                ],
+                str_contains($name, 'configurar notificaciones') => [
+                    'configuracioncontroller',
+                    'alertas activas',
+                    'correo alertas',
+                    'devcontrolalertservice',
+                ],
+                default => [],
+            };
+
+            if ($notificationSignals !== []
+                && collect($notificationSignals)->every(fn (string $signal) => str_contains($contents, $signal))) {
+                return true;
+            }
+        }
 
         foreach ($requirements as $requirement) {
             if (! str_contains($contents, $requirement)) {
@@ -2908,10 +3226,23 @@ class AsistenteController extends Controller
     {
         $contents = '';
 
-        foreach ([base_path('app'), base_path('resources'), base_path('routes')] as $directory) {
+        foreach ([
+            base_path('app'),
+            base_path('resources'),
+            base_path('routes'),
+            base_path('config'),
+            base_path('database'),
+            base_path('tests'),
+        ] as $directory) {
+            if (! File::isDirectory($directory)) {
+                continue;
+            }
+
             foreach (File::allFiles($directory) as $file) {
                 $contents .= "\n".$this->normalizeInstruction($file->getContents());
-                $contents .= "\n".$this->normalizeInstruction($file->getRelativePathname());
+                $contents .= "\n".$this->normalizeInstruction(
+                    str_replace(base_path().DIRECTORY_SEPARATOR, '', $file->getPathname())
+                );
             }
         }
 

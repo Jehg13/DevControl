@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Services\DevControlAlertService;
 
 class Tarea extends Model
 {
@@ -27,6 +28,41 @@ class Tarea extends Model
         'fecha_limite' => 'date',
         'fecha_completada' => 'date',
     ];
+
+    protected static function booted(): void
+    {
+        static::created(function (Tarea $tarea): void {
+            Actividad::registrar('Tarea creada', "Se registró la tarea: {$tarea->titulo}.", $tarea);
+            app(DevControlAlertService::class)->send(
+                'Nueva tarea registrada',
+                $tarea->titulo,
+                $tarea->proyecto,
+                [
+                    'Prioridad' => $tarea->prioridad,
+                    'Estado' => $tarea->estado,
+                    'Fecha límite' => $tarea->fecha_limite?->format('Y-m-d') ?: 'Sin fecha límite',
+                ]
+            );
+        });
+
+        static::updated(function (Tarea $tarea): void {
+            Actividad::registrar('Tarea actualizada', "Se actualizó la tarea: {$tarea->titulo}.", $tarea, ['cambios' => $tarea->getChanges()]);
+            if (! $tarea->wasChanged(['estado', 'prioridad', 'fecha_limite'])) {
+                return;
+            }
+
+            app(DevControlAlertService::class)->send(
+                'Tarea actualizada',
+                $tarea->titulo,
+                $tarea->proyecto,
+                [
+                    'Prioridad' => $tarea->prioridad,
+                    'Estado' => $tarea->estado,
+                    'Fecha límite' => $tarea->fecha_limite?->format('Y-m-d') ?: 'Sin fecha límite',
+                ]
+            );
+        });
+    }
 
     /**
      * Una tarea pertenece a un proyecto.
