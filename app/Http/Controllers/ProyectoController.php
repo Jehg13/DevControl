@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\Process\Process;
 
 class ProyectoController extends Controller
 {
@@ -570,6 +571,364 @@ class ProyectoController extends Controller
         ]);
 
         return back()->with('success', 'Repositorio configurado manualmente.');
+    }
+
+    public function analizarGithub(Proyecto $proyecto)
+    {
+        $integracion = $proyecto->integracionGithub;
+        $partes = $integracion ? $this->partesRepositorioGithub($integracion->repositorio_url) : null;
+
+        if (! $partes) {
+            return back()->with('error', 'Configura una URL válida de GitHub antes de analizar el repositorio.');
+        }
+
+        try {
+            $cliente = $this->clienteGithub();
+            $repositorio = $cliente->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}")->throw()->json();
+            $rama = $repositorio['default_branch'] ?? 'main';
+            $arbol = $cliente->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/trees/{$rama}", [
+                'recursive' => '1',
+            ])->throw()->json();
+            $archivos = collect($arbol['tree'] ?? [])
+                ->where('type', 'blob')
+                ->pluck('path');
+            $extensiones = $archivos
+                ->map(fn (string $path) => strtolower(pathinfo($path, PATHINFO_EXTENSION)))
+                ->filter()
+                ->countBy()
+                ->sortDesc()
+                ->take(8)
+                ->map(fn (int $count, string $extension) => "{$extension}: {$count}")
+                ->implode(', ');
+            $directorios = $archivos
+                ->map(fn (string $path) => explode('/', $path)[0])
+                ->unique()
+                ->take(12)
+                ->implode(', ');
+
+            $integracion?->update([
+                'repositorio_propietario' => $partes['owner'],
+                'repositorio_nombre' => $partes['repo'],
+                'rama_principal' => $rama,
+                'estado' => 'analizado',
+                'ultima_sincronizacion' => now(),
+                'ultimo_error' => null,
+            ]);
+
+            return back()->with(
+                'success',
+                "Análisis de GitHub completado: {$archivos->count()} archivos en {$rama}. ".
+                "Tecnologías detectadas por extensión: ".($extensiones ?: 'no identificadas').". ".
+                "Directorios principales: ".($directorios ?: 'raíz del repositorio').'.'
+            );
+        } catch (ConnectionException $exception) {
+            return back()->with('error', 'No se pudo conectar con GitHub para analizar el repositorio.');
+        } catch (RequestException $exception) {
+            return back()->with('error', $exception->response?->json('message') ?? 'GitHub rechazó el análisis del repositorio.');
+        }
+    }
+
+    public function crearCommitGithub(Request $request, Proyecto $proyecto)
+    {
+        $datos = $request->validate([
+            'mensaje' => ['required', 'string', 'max:500'],
+            'ruta' => ['required', 'string', 'max:500', 'regex:/^(?!\/)(?!.*\.\.).+$/'],
+            'contenido' => ['required', 'string', 'max:1000000'],
+            'rama' => ['nullable', 'string', 'max:150'],
+        ]);
+        $token = config('services.github.token');
+
+        if (! $token) {
+            return back()->with('error', 'Configura GITHUB_TOKEN en el archivo .env para autorizar commits.');
+        }
+
+        try {
+            $this->crearCommitGithubConDatos($proyecto, $datos);
+
+            return back()->with('success', "Commit creado correctamente en {$datos['ruta']}.");
+        } catch (ConnectionException $exception) {
+            return back()->with('error', 'No se pudo conectar con GitHub para crear el commit.');
+        } catch (RequestException $exception) {
+            return back()->with('error', $exception->response?->json('message') ?? 'GitHub rechazó el commit.');
+        }
+    }
+
+    /**
+     * Crea o actualiza un archivo mediante la API de contenidos de GitHub.
+     *
+     * Este método también es utilizado por Nexus después de confirmar la acción.
+     *
+     * @param  array{mensaje:string,ruta:string,contenido:string,rama?:string|null}  $datos
+     */
+    public function crearCommitGithubConDatos(Proyecto $proyecto, array $datos): void
+    {
+        $integracion = $proyecto->integracionGithub;
+        $partes = $integracion ? $this->partesRepositorioGithub($integracion->repositorio_url) : null;
+
+        if (! $partes) {
+            throw new \RuntimeException('Configura una URL válida de GitHub antes de crear commits.');
+        }
+
+        $rama = $datos['rama'] ?: ($integracion->rama_principal ?: 'main');
+        $endpoint = "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/contents/".ltrim($datos['ruta'], '/');
+        $cliente = $this->clienteGithub(true);
+        $existente = $cliente->get($endpoint, ['ref' => $rama]);
+        $payload = [
+            'message' => $datos['mensaje'],
+            'content' => base64_encode($datos['contenido']),
+            'branch' => $rama,
+        ];
+
+        if ($existente->successful()) {
+            $payload['sha'] = $existente->json('sha');
+        } elseif ($existente->status() !== 404) {
+            $existente->throw();
+        }
+
+        $commit = $cliente->put($endpoint, $payload)->throw()->json();
+        $sha = $commit['commit']['sha'] ?? null;
+        $integracion?->update([
+            'estado' => 'sincronizado',
+            'ultimo_commit_sha' => $sha,
+            'ultimo_commit_mensaje' => $datos['mensaje'],
+            'ultima_sincronizacion' => now(),
+            'ultimo_error' => null,
+        ]);
+        Actualizacion::create([
+            'proyecto_id' => $proyecto->id,
+            'titulo' => 'Commit creado en GitHub',
+            'detalles' => "Se actualizó {$datos['ruta']} en la rama {$rama}.",
+            'commit' => $sha,
+        ]);
+    }
+
+    /**
+     * Devuelve los cambios locales seguros que pueden publicarse en el repositorio.
+     *
+     * @return array{files:array<int,array{path:string,status:string}>,error:?string}
+     */
+    public function cambiosLocalesPublicables(): array
+    {
+        $git = $this->rutaEjecutableGit();
+
+        if (! $git) {
+            return [
+                'files' => [],
+                'error' => 'No se encontró Git en el servidor. Configura GIT_BINARY en .env con la ruta completa a git.exe.',
+            ];
+        }
+
+        $process = new Process(
+            [$git, 'status', '--porcelain', '--untracked-files=all'],
+            base_path()
+        );
+        $process->run();
+
+        if (! $process->isSuccessful()) {
+            return [
+                'files' => [],
+                'error' => trim($process->getErrorOutput()) ?: 'No se pudo consultar el estado local de Git.',
+            ];
+        }
+
+        $files = [];
+        foreach (preg_split('/\R/', rtrim($process->getOutput())) ?: [] as $line) {
+            if (strlen($line) < 4) {
+                continue;
+            }
+
+            $status = trim(substr($line, 0, 2));
+            $path = preg_replace('/^\s+|\s+$/u', '', substr($line, 3)) ?? '';
+            if (str_contains($path, ' -> ')) {
+                $path = preg_replace('/^\s+|\s+$/u', '', strrchr($path, '>')) ?? '';
+            }
+
+            if ($path !== '' && ! $this->esRutaLocalPublicable($path)) {
+                continue;
+            }
+
+            if ($path !== '') {
+                $files[] = ['path' => str_replace('\\', '/', $path), 'status' => $status];
+            }
+        }
+
+        return ['files' => $files, 'error' => null];
+    }
+
+    private function rutaEjecutableGit(): ?string
+    {
+        $configurada = config('services.github.git_binary');
+        $candidatas = array_filter([
+            $configurada,
+            PHP_OS_FAMILY === 'Windows' ? getenv('ProgramFiles').'\Git\cmd\git.exe' : null,
+            PHP_OS_FAMILY === 'Windows' ? getenv('ProgramFiles').'\Git\bin\git.exe' : null,
+            PHP_OS_FAMILY === 'Windows' ? getenv('ProgramW6432').'\Git\cmd\git.exe' : null,
+            PHP_OS_FAMILY === 'Windows' ? getenv('LocalAppData').'\Programs\Git\cmd\git.exe' : null,
+            'git',
+        ]);
+
+        foreach ($candidatas as $candidata) {
+            if ($candidata === 'git' || is_file($candidata)) {
+                return $candidata;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Publica todos los cambios locales permitidos como un único commit de GitHub.
+     *
+     * @param  array{mensaje:string,rama?:string|null}  $datos
+     */
+    public function crearCommitGithubDesdeCambiosLocales(Proyecto $proyecto, array $datos): array
+    {
+        $integracion = $proyecto->integracionGithub;
+        $partes = $integracion ? $this->partesRepositorioGithub($integracion->repositorio_url) : null;
+        $cambios = $this->cambiosLocalesPublicables();
+
+        if ($cambios['error']) {
+            throw new \RuntimeException($cambios['error']);
+        }
+
+        if (! $partes) {
+            throw new \RuntimeException('Configura una URL válida de GitHub antes de crear commits.');
+        }
+
+        if ($cambios['files'] === []) {
+            throw new \RuntimeException('No hay cambios locales publicables en el proyecto.');
+        }
+
+        $rama = $datos['rama'] ?: ($integracion->rama_principal ?: 'main');
+        $cliente = $this->clienteGithub(true);
+        $cliente->get('https://api.github.com/user')->throw();
+        $repositorio = $cliente->get(
+            "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}"
+        );
+
+        if ($repositorio->status() === 404) {
+            throw new \RuntimeException(
+                "El token no puede ver el repositorio {$partes['owner']}/{$partes['repo']}. Revisa Repository access."
+            );
+        }
+
+        $repositorio->throw();
+        $permisos = $repositorio->json('permissions', []);
+        if (($permisos['push'] ?? false) !== true) {
+            throw new \RuntimeException(
+                "La cuenta del token no tiene permiso de escritura en {$partes['owner']}/{$partes['repo']}."
+            );
+        }
+
+        $ref = $cliente->get(
+            "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/ref/heads/{$rama}"
+        )->throw()->json();
+        $baseCommitSha = $ref['object']['sha'];
+        $baseCommit = $cliente->get(
+            "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/commits/{$baseCommitSha}"
+        )->throw()->json();
+
+        $tree = [];
+        foreach ($cambios['files'] as $cambio) {
+            $path = $cambio['path'];
+            if (str_contains($cambio['status'], 'D')) {
+                $tree[] = [
+                    'path' => $path,
+                    'mode' => '100644',
+                    'type' => 'blob',
+                    'sha' => null,
+                ];
+                continue;
+            }
+
+            $absolutePath = base_path(str_replace('/', DIRECTORY_SEPARATOR, $path));
+            if (! is_file($absolutePath)) {
+                continue;
+            }
+
+            $blob = $cliente->post(
+                "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/blobs",
+                [
+                    'content' => base64_encode(file_get_contents($absolutePath)),
+                    'encoding' => 'base64',
+                ]
+            )->throw()->json();
+            $tree[] = [
+                'path' => $path,
+                'mode' => '100644',
+                'type' => 'blob',
+                'sha' => $blob['sha'],
+            ];
+        }
+
+        $nuevoArbol = $cliente->post(
+            "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/trees",
+            [
+                'base_tree' => $baseCommit['tree']['sha'],
+                'tree' => $tree,
+            ]
+        )->throw()->json();
+        $commit = $cliente->post(
+            "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/commits",
+            [
+                'message' => $datos['mensaje'],
+                'tree' => $nuevoArbol['sha'],
+                'parents' => [$baseCommitSha],
+            ]
+        )->throw()->json();
+        $cliente->patch(
+            "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/refs/heads/{$rama}",
+            ['sha' => $commit['sha']]
+        )->throw();
+
+        $integracion?->update([
+            'estado' => 'sincronizado',
+            'ultimo_commit_sha' => $commit['sha'],
+            'ultimo_commit_mensaje' => $datos['mensaje'],
+            'ultima_sincronizacion' => now(),
+            'ultimo_error' => null,
+        ]);
+        Actualizacion::create([
+            'proyecto_id' => $proyecto->id,
+            'titulo' => 'Cambios locales publicados en GitHub',
+            'detalles' => 'Se publicaron '.count($tree)." archivos en la rama {$rama}.",
+            'commit' => $commit['sha'],
+        ]);
+
+        return [
+            'sha' => $commit['sha'],
+            'files' => array_column($cambios['files'], 'path'),
+            'branch' => $rama,
+        ];
+    }
+
+    private function esRutaLocalPublicable(string $path): bool
+    {
+        $normalized = strtolower(str_replace('\\', '/', $path));
+
+        foreach (['.env', 'vendor/', 'node_modules/', 'storage/', 'bootstrap/cache/'] as $excluded) {
+            $matches = $excluded === '.env'
+                ? preg_match('~(^|/)\.env$~', $normalized) === 1
+                : str_starts_with($normalized, $excluded);
+
+            if ($matches) {
+                return false;
+            }
+        }
+
+        return preg_match('~(^|/)\.env$~', $normalized) !== 1;
+    }
+
+    private function clienteGithub(bool $authenticated = false)
+    {
+        $cliente = Http::acceptJson()
+            ->withHeaders(['User-Agent' => 'DevControl'])
+            ->withOptions(['verify' => config('services.github.ca_bundle') ?: true])
+            ->timeout(20);
+
+        return $authenticated
+            ? $cliente->withToken(config('services.github.token'))
+            : $cliente;
     }
 
     private function guardarIntegracionGithub(Proyecto $proyecto): void

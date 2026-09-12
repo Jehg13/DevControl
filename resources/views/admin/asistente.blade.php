@@ -50,7 +50,7 @@
                 <form id="assistantForm" class="border-t border-white/10 p-4">
                     @csrf
                     <div class="flex gap-3">
-                        <textarea id="assistantInput" rows="1" maxlength="1000" autocomplete="off" placeholder="Escribe una instrucción..." class="max-h-32 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-[#d61f2c]/60"></textarea>
+                        <textarea id="assistantInput" rows="1" maxlength="20000" autocomplete="off" placeholder="Escribe una instrucción..." class="max-h-32 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-[#d61f2c]/60"></textarea>
                         <button id="sendButton" class="self-end rounded-xl bg-[#d61f2c] px-5 py-3 font-mono2 text-xs font-bold text-white transition hover:bg-[#ef2937] disabled:cursor-not-allowed disabled:opacity-50">Enviar</button>
                     </div>
                     <p class="mt-2 font-mono2 text-[10px] text-gray-600">Enter para enviar · Shift + Enter para nueva línea</p>

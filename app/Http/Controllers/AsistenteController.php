@@ -7,6 +7,9 @@ use App\Models\Incidente;
 use App\Models\Proyecto;
 use App\Models\Tarea;
 use App\Models\User;
+use App\Http\Controllers\ProyectoController;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -134,7 +137,7 @@ class AsistenteController extends Controller
     public function message(Request $request)
     {
         $validated = $request->validate([
-            'message' => ['required', 'string', 'max:1000'],
+            'message' => ['required', 'string', 'max:20000'],
         ]);
 
         $messages = $request->session()->get('assistant_messages', []);
@@ -179,6 +182,18 @@ class AsistenteController extends Controller
             if ($confirmation) {
                 return $confirmation;
             }
+        }
+
+        if ($this->isGithubCommitInstruction($text)) {
+            return $this->requestGithubCommitAuthorization($input);
+        }
+
+        if ($this->isProjectStructureUpdateInstruction($text)) {
+            return $this->requestProjectStructureUpdateAuthorization($input);
+        }
+
+        if ($this->isProjectCreationInstruction($text)) {
+            return $this->requestProjectCreationAuthorization($input);
         }
 
         if ($followUp = $this->resolveFollowUpInstruction($text, $history)) {
@@ -930,6 +945,323 @@ class AsistenteController extends Controller
             collect($recommendations)->values()->map(fn (string $recommendation, int $index) => ($index + 1).". {$recommendation}")->implode("\n");
     }
 
+    private function isProjectCreationInstruction(string $text): bool
+    {
+        return $this->hasApproximateTerm($text, ['crea', 'crear', 'registra', 'registrar'])
+            && $this->hasApproximateTerm($text, ['proyecto'])
+            && (
+                str_contains($text, 'nombre del proyecto')
+                || str_contains($text, 'secciones y funcionalidades')
+                || str_contains($text, 'objetivo principal')
+            );
+    }
+
+    private function isProjectStructureUpdateInstruction(string $text): bool
+    {
+        $hasStructure = (
+                str_contains($text, 'nombre del proyecto')
+                || str_contains($text, 'nombre proyecto')
+                || preg_match('/actualiza(?:r)?\s+el\s+proyecto\s+\**[^*\n]+\**/u', $text) === 1
+                || (str_contains($text, 'actualiza el proyecto') && str_contains($text, 'agregando las funcionalidades'))
+            )
+            && (
+                str_contains($text, 'funcionalidades')
+                || str_contains($text, 'funcionalidad')
+            )
+            && (
+                str_contains($text, 'que abarca')
+                || str_contains($text, 'estado')
+                || $this->hasApproximateTerm($text, ['implementada', 'parcial', 'en desarrollo'])
+            );
+
+        $hasNumberedSections = preg_match('/(?:^|\s)\d+\s+\p{L}/u', $text) === 1;
+        $hasCompactSections = $this->hasApproximateTerm($text, ['implementada', 'parcial', 'en desarrollo']);
+
+        return $hasStructure
+            && $this->hasApproximateTerm($text, ['proyecto'])
+            && ($hasNumberedSections || $hasCompactSections || strlen($text) > 2000);
+    }
+
+    private function requestProjectStructureUpdateAuthorization(string $input): array
+    {
+        if (! Schema::hasTable('proyectos') || ! Schema::hasTable('secciones') || ! Schema::hasTable('funcionalidades')) {
+            return $this->assistantResponse('No puedo actualizar la estructura porque faltan las tablas de proyectos, secciones o funcionalidades.');
+        }
+
+        $parsed = $this->parseProjectPrompt($input);
+        $project = $parsed
+            ? Proyecto::query()
+                ->where(function ($query) use ($parsed) {
+                    $query
+                        ->whereRaw('LOWER(nombre) = ?', [mb_strtolower($parsed['project']['nombre'], 'UTF-8')])
+                        ->orWhereRaw('LOWER(nombre) = ?', ['devcontrol']);
+                })
+                ->first()
+            : null;
+
+        if (! $parsed || ! $project) {
+            return $this->assistantResponse(
+                'No encontré el proyecto indicado o no pude leer el prompt. Usa el nombre exacto y conserva los encabezados de secciones, funcionalidades y estado.'
+            );
+        }
+
+        $sectionCount = count($parsed['sections']);
+        $featureCount = collect($parsed['sections'])->sum(fn (array $section) => count($section['features']));
+
+        return [
+            'message' => [
+                'role' => 'assistant',
+                'content' => "Encontré el proyecto \"{$project->nombre}\".\n\n".
+                    "Voy a agregar o actualizar {$featureCount} funcionalidades dentro de {$sectionCount} secciones, ".
+                    "respetando los nombres, estados y evitando duplicados. No eliminaré funcionalidades existentes.\n\n".
+                    '¿Confirmas? Responde "sí, confirmar" o "cancelar".',
+            ],
+            'navigation' => null,
+            'pending_action' => [
+                'type' => 'update_project_structure',
+                'project_id' => $project->id,
+                'sections' => $parsed['sections'],
+            ],
+        ];
+    }
+
+    private function requestProjectCreationAuthorization(string $input): array
+    {
+        if (! Schema::hasTable('proyectos') || ! Schema::hasTable('secciones') || ! Schema::hasTable('funcionalidades')) {
+            return $this->assistantResponse(
+                'No puedo crear el proyecto porque todavía no están disponibles las tablas de proyectos, secciones y funcionalidades.'
+            );
+        }
+
+        $project = $this->parseProjectPrompt($input);
+
+        if (! $project) {
+            return $this->assistantResponse(
+                'Puedo crear proyectos mediante prompts, pero necesito el formato con “Nombre del proyecto”, “Descripción” y, si aplica, secciones con funcionalidades y estado.'
+            );
+        }
+
+        $existing = Proyecto::whereRaw('LOWER(nombre) = ?', [mb_strtolower($project['project']['nombre'], 'UTF-8')])->first();
+
+        if ($existing) {
+            return $this->requestProjectStructureUpdateAuthorization($input);
+        }
+
+        $sectionCount = count($project['sections']);
+        $featureCount = collect($project['sections'])->sum(fn (array $section) => count($section['features']));
+
+        return [
+            'message' => [
+                'role' => 'assistant',
+                'content' => "Entendí que quieres crear este proyecto:\n\n".
+                    "Nombre: {$project['project']['nombre']}\n".
+                    "Estado: {$project['project']['estado']}\n".
+                    "Secciones: {$sectionCount}\n".
+                    "Funcionalidades: {$featureCount}\n\n".
+                    "La creación guardará el proyecto y toda su estructura. ¿Confirmas? Responde \"sí, confirmar\" o \"cancelar\".",
+            ],
+            'navigation' => null,
+            'pending_action' => [
+                'type' => 'create_project',
+                'project' => $project['project'],
+                'sections' => $project['sections'],
+            ],
+        ];
+    }
+
+    private function parseProjectPrompt(string $input): ?array
+    {
+        $name = $this->extractPromptField($input, 'Nombre del proyecto');
+        if (! $name && preg_match('/actualiza(?:r)?\s+el\s+proyecto\s+(?:\*\*)?([^*\n]+?)(?:\*\*)?(?:\s+dentro de|\s+agregando|\s*:)/iu', $input, $nameMatch)) {
+            $name = trim($nameMatch[1]);
+        }
+        $name = $name
+            ? trim(preg_split('/\R/u', $name, 2)[0], " \t\n\r\0\x0B*`\"'")
+            : null;
+
+        if (! $name) {
+            return null;
+        }
+
+        $sections = [];
+        preg_match_all('/\*\*(?:Secci.n\s+)?["\']?([^*"\']+?)["\']?\s+[^\p{L}\p{N}\s]\s+(Implementada|Parcial|En desarrollo)\*\*/iu', $input, $inlineHeadings, PREG_OFFSET_CAPTURE);
+
+        foreach ($inlineHeadings[1] ?? [] as $index => [$rawSectionName, $offset]) {
+            $start = $inlineHeadings[0][$index][1] + strlen($inlineHeadings[0][$index][0]);
+            $end = isset($inlineHeadings[0][$index + 1])
+                ? $inlineHeadings[0][$index + 1][1]
+                : strlen($input);
+            $block = substr($input, $start, $end - $start);
+            preg_match_all('/["\']([^"\']+)["\']/u', $block, $featureLines);
+            $sectionName = trim($rawSectionName);
+
+            if (in_array($this->normalizeInstruction($sectionName), ['inicio se sesion', 'inicio de sesion'], true)) {
+                $sectionName = 'Acceso';
+            }
+
+            $sections[] = [
+                'nombre' => $sectionName,
+                'descripcion' => null,
+                'features' => array_map(fn (string $featureName) => [
+                    'nombre' => trim($featureName),
+                    'descripcion' => null,
+                    'estado' => $this->normalizeFeatureStatus($inlineHeadings[2][$index][0]),
+                ], $featureLines[1] ?? []),
+            ];
+        }
+
+        if ($sections !== []) {
+            return [
+                'project' => [
+                    'nombre' => trim($name),
+                    'descripcion' => $this->extractPromptField($input, 'Descripción'),
+                    'contexto' => $this->extractPromptField($input, 'Contexto del proyecto'),
+                    'objetivo' => $this->extractPromptField($input, 'Objetivo principal'),
+                    'tecnologias' => $this->extractPromptField($input, 'Tecnologías'),
+                    'reglas' => $this->extractPromptList($input, 'Reglas importantes'),
+                    'repositorio_url' => null,
+                    'fecha_inicio' => now()->toDateString(),
+                    'fecha_meta' => null,
+                    'estado' => 'Activo',
+                    'progreso' => 0,
+                ],
+                'sections' => $sections,
+            ];
+        }
+
+        preg_match_all('/^\s*\*\*.+?\*\*\s*$/mu', $input, $headingLines, PREG_OFFSET_CAPTURE);
+
+        foreach ($headingLines[0] ?? [] as $index => [$heading, $offset]) {
+            if (preg_match('/^\s*\*\*(.+?)\s+[^\p{L}\p{N}\s]\s+(Implementada|Parcial|En desarrollo)\*\*\s*$/iu', $heading, $headingMatch) !== 1) {
+                continue;
+            }
+
+            $start = $offset + strlen($heading);
+            $end = isset($headingLines[0][$index + 1])
+                ? $headingLines[0][$index + 1][1]
+                : strlen($input);
+            $block = substr($input, $start, $end - $start);
+            preg_match_all('/^\s*-\s+(.+?)\s*$/mu', $block, $featureLines);
+            $sectionName = preg_replace('/^\s*secci.n\s+/iu', '', $headingMatch[1]) ?? $headingMatch[1];
+            $sectionName = trim($sectionName, " \t\n\r\0\x0B\"'");
+            if (in_array($this->normalizeInstruction($sectionName), ['inicio se sesion', 'inicio de sesion'], true)) {
+                $sectionName = 'Acceso';
+            }
+
+            $sections[] = [
+                'nombre' => $sectionName,
+                'descripcion' => null,
+                'features' => array_map(fn (string $featureName) => [
+                    'nombre' => trim($featureName, " \t\n\r\0\x0B\"'"),
+                    'descripcion' => null,
+                    'estado' => $this->normalizeFeatureStatus($headingMatch[2]),
+                ], $featureLines[1] ?? []),
+            ];
+        }
+
+        if ($sections !== []) {
+            return [
+                'project' => [
+                    'nombre' => trim($name),
+                    'descripcion' => $this->extractPromptField($input, 'Descripción'),
+                    'contexto' => $this->extractPromptField($input, 'Contexto del proyecto'),
+                    'objetivo' => $this->extractPromptField($input, 'Objetivo principal'),
+                    'tecnologias' => $this->extractPromptField($input, 'Tecnologías'),
+                    'reglas' => $this->extractPromptList($input, 'Reglas importantes'),
+                    'repositorio_url' => null,
+                    'fecha_inicio' => now()->toDateString(),
+                    'fecha_meta' => null,
+                    'estado' => 'Activo',
+                    'progreso' => 0,
+                ],
+                'sections' => $sections,
+            ];
+        }
+
+        preg_match_all('/^\s*###\s+\d+\.\s+(.+?)\s*$/mu', $input, $headings, PREG_OFFSET_CAPTURE);
+        $matches = $headings[1] ?? [];
+
+        foreach ($matches as $index => [$sectionName, $offset]) {
+            $start = $offset + strlen($sectionName);
+            $end = isset($matches[$index + 1]) ? $matches[$index + 1][1] : strlen($input);
+            $block = substr($input, $start, $end - $start);
+            $scope = $this->extractPromptField($block, 'Qué abarca') ?? '';
+            $status = $this->normalizeFeatureStatus($this->extractPromptField($block, 'Estado') ?? 'Desconocida');
+            $features = [];
+
+            if (preg_match('/\*\*Funcionalidades:\*\*(.*?)(?:\*\*Estado:\*\*|$)/su', $block, $featureMatch)) {
+                preg_match_all('/^\s*-\s+(.+?)\s*$/mu', $featureMatch[1], $featureLines);
+                foreach ($featureLines[1] as $featureName) {
+                    $features[] = [
+                        'nombre' => trim($featureName),
+                        'descripcion' => null,
+                        'estado' => $status,
+                    ];
+                }
+            }
+
+            $sections[] = [
+                'nombre' => trim($sectionName),
+                'descripcion' => trim($scope),
+                'features' => $features,
+            ];
+        }
+
+        return [
+            'project' => [
+                'nombre' => trim($name),
+                'descripcion' => $this->extractPromptField($input, 'Descripción'),
+                'contexto' => $this->extractPromptField($input, 'Contexto del proyecto'),
+                'objetivo' => $this->extractPromptField($input, 'Objetivo principal'),
+                'tecnologias' => $this->extractPromptField($input, 'Tecnologías'),
+                'reglas' => $this->extractPromptList($input, 'Reglas importantes'),
+                'repositorio_url' => null,
+                'fecha_inicio' => now()->toDateString(),
+                'fecha_meta' => null,
+                'estado' => 'Activo',
+                'progreso' => 0,
+            ],
+            'sections' => $sections,
+        ];
+    }
+
+    private function extractPromptField(string $input, string $label): ?string
+    {
+        $pattern = '/(?:\*\*)?'.preg_quote($label, '/').':(?:\*\*)?\s*(.*?)(?=\n\s*(?:\*\*|###)|\z)/su';
+
+        if (preg_match($pattern, $input, $match) !== 1) {
+            return null;
+        }
+
+        $value = trim(preg_replace('/\r\n?/', "\n", $match[1]) ?? $match[1]);
+        $value = trim($value, " \t\n\r\0\x0B*`");
+        return $value !== '' ? $value : null;
+    }
+
+    private function extractPromptList(string $input, string $label): ?string
+    {
+        $value = $this->extractPromptField($input, $label);
+
+        if (! $value) {
+            return null;
+        }
+
+        preg_match_all('/^\s*-\s+(.+?)\s*$/mu', $value, $items);
+        return $items[1] ? implode("\n", array_map('trim', $items[1])) : $value;
+    }
+
+    private function normalizeFeatureStatus(string $status): string
+    {
+        return match ($this->normalizeInstruction($status)) {
+            'implementada' => 'Implementada',
+            'parcial' => 'Parcial',
+            'en desarrollo' => 'En desarrollo',
+            'pendiente' => 'Pendiente',
+            'requiere revision' => 'Requiere revisión',
+            default => 'Desconocida',
+        };
+    }
+
     private function isMutationInstruction(string $text): bool
     {
         $hasAction = $this->hasApproximateTerm($text, [
@@ -1143,6 +1475,110 @@ class AsistenteController extends Controller
             );
         }
 
+        if ($action['type'] === 'github_commit') {
+            $project = Proyecto::findOrFail($action['project_id']);
+
+            try {
+                app(ProyectoController::class)->crearCommitGithubConDatos($project, $action['data']);
+            } catch (ConnectionException $exception) {
+                return $this->assistantResponse(
+                    'No se pudo conectar con GitHub para crear el commit. Revisa la conexión y vuelve a intentarlo.'
+                );
+            } catch (RequestException $exception) {
+                return $this->assistantResponse(
+                    $exception->response?->json('message')
+                        ? "GitHub rechazó el commit: {$exception->response->json('message')}"
+                        : 'GitHub rechazó el commit. Revisa el token y sus permisos de escritura.'
+                );
+            }
+
+            return $this->assistantResponse(
+                "Listo. Creé el commit en GitHub para \"{$project->nombre}\" en la ruta \"{$action['data']['ruta']}\"."
+            );
+        }
+
+        if ($action['type'] === 'github_local_commit') {
+            $project = Proyecto::findOrFail($action['project_id']);
+
+            try {
+                $result = app(ProyectoController::class)
+                    ->crearCommitGithubDesdeCambiosLocales($project, $action['data']);
+            } catch (ConnectionException $exception) {
+                return $this->assistantResponse(
+                    'No se pudo conectar con GitHub para publicar los cambios locales.'
+                );
+            } catch (RequestException $exception) {
+                $status = $exception->response?->status();
+                $detail = $exception->response?->json('message');
+
+                return $this->assistantResponse(
+                    $detail
+                        ? "GitHub rechazó la publicación".($status ? " (HTTP {$status})" : '').": {$detail}"
+                        : 'GitHub rechazó la publicación. Revisa el token y sus permisos de escritura.'
+                );
+            } catch (\RuntimeException $exception) {
+                return $this->assistantResponse("No se pudo preparar la publicación: {$exception->getMessage()}");
+            }
+
+            return $this->assistantResponse(
+                "Listo. Publiqué ".count($result['files'])." archivos de \"{$project->nombre}\" ".
+                "en un commit de la rama {$result['branch']}."
+            );
+        }
+
+        if ($action['type'] === 'update_project_structure') {
+            $project = Proyecto::with('secciones.funcionalidades')->findOrFail($action['project_id']);
+
+            DB::transaction(function () use ($project, $action): void {
+                foreach ($action['sections'] as $sectionIndex => $sectionData) {
+                    $section = $project->secciones()
+                        ->where('nombre', $sectionData['nombre'])
+                        ->first();
+
+                    if (! $section) {
+                        $section = $project->secciones()->create([
+                            'nombre' => $sectionData['nombre'],
+                            'descripcion' => $sectionData['descripcion'] ?: null,
+                            'orden' => $sectionIndex,
+                        ]);
+                    } else {
+                        $section->update([
+                            'descripcion' => $sectionData['descripcion'] ?: $section->descripcion,
+                            'orden' => $sectionIndex,
+                        ]);
+                    }
+
+                    foreach ($sectionData['features'] as $featureIndex => $featureData) {
+                        $feature = $section->funcionalidades()
+                            ->where('nombre', $featureData['nombre'])
+                            ->first();
+
+                        if (! $feature) {
+                            $section->funcionalidades()->create([
+                                'nombre' => $featureData['nombre'],
+                                'descripcion' => null,
+                                'estado' => $featureData['estado'],
+                                'orden' => $featureIndex,
+                            ]);
+                        } else {
+                            $feature->update([
+                                'estado' => $featureData['estado'],
+                                'orden' => $featureIndex,
+                            ]);
+                        }
+                    }
+                }
+            });
+
+            $project->load('secciones.funcionalidades');
+            $featureCount = $project->secciones->sum(fn ($section) => $section->funcionalidades->count());
+
+            return $this->assistantResponse(
+                "Listo. Actualicé {$project->secciones->count()} secciones del proyecto \"{$project->nombre}\" sin duplicar funcionalidades. Ahora tiene {$featureCount} funcionalidades.",
+                route('proyectos.show', $project)
+            );
+        }
+
         if ($action['type'] === 'delete_all') {
             $project = Proyecto::findOrFail($action['project_id']);
             $deleted = $action['entity'] === 'tareas'
@@ -1188,6 +1624,37 @@ class AsistenteController extends Controller
             return $this->assistantResponse(
                 "Listo. Registré la incidencia \"{$incident->titulo}\" en el proyecto asociado.",
                 null
+            );
+        }
+
+        if ($action['type'] === 'create_project') {
+            $project = DB::transaction(function () use ($action) {
+                $project = Proyecto::create($action['project']);
+
+                foreach ($action['sections'] as $sectionIndex => $sectionData) {
+                    $section = $project->secciones()->create([
+                        'nombre' => $sectionData['nombre'],
+                        'descripcion' => $sectionData['descripcion'] ?: null,
+                        'orden' => $sectionIndex,
+                    ]);
+
+                    foreach ($sectionData['features'] as $featureIndex => $featureData) {
+                        $section->funcionalidades()->create([
+                            'nombre' => $featureData['nombre'],
+                            'descripcion' => $featureData['descripcion'] ?: null,
+                            'estado' => $featureData['estado'],
+                            'orden' => $featureIndex,
+                        ]);
+                    }
+                }
+
+                return $project;
+            });
+
+            return $this->assistantResponse(
+                "Listo. Creé el proyecto \"{$project->nombre}\" con {$project->secciones()->count()} secciones y ".
+                "{$project->secciones()->withCount('funcionalidades')->get()->sum('funcionalidades_count')} funcionalidades.",
+                route('proyectos.show', $project)
             );
         }
 
@@ -1268,6 +1735,177 @@ class AsistenteController extends Controller
                 'finding_id' => $proposal['hallazgo_id'],
             ],
         ];
+    }
+
+    private function isGithubCommitInstruction(string $text): bool
+    {
+        return $this->hasApproximateTerm($text, ['commit'])
+            && $this->projectMentionedInText($text) !== null
+            && $this->hasApproximatePhrase($text, [
+                'haz un commit',
+                'hacer un commit',
+                'crea commit',
+                'haz commit',
+                'crear un commit',
+                'realiza un commit',
+                'sube un commit',
+                'commit del proyecto',
+                'commit en el proyecto',
+                'actualiza el archivo',
+            ]);
+    }
+
+    private function requestGithubCommitAuthorization(string $input): array
+    {
+        $project = $this->projectMentionedInText($this->normalizeInstruction($input));
+        $projectName = $this->extractLabeledQuotedValue($input, ['proyecto', 'project']);
+
+        if ($projectName !== null) {
+            $project = Proyecto::query()->get()->first(
+                fn (Proyecto $candidate) => $this->normalizeInstruction($candidate->nombre)
+                    === $this->normalizeInstruction($projectName)
+            );
+        }
+
+        if (! $project) {
+            return $this->assistantResponse(
+                'No encontré ese proyecto. Indica el nombre exacto, por ejemplo: proyecto "DevControl".'
+            );
+        }
+
+        $integracion = $project->integracionGithub;
+        $mensaje = $this->extractLabeledQuotedValue($input, ['mensaje del commit', 'mensaje']);
+        $ruta = $this->extractLabeledQuotedValue($input, ['ruta', 'archivo']);
+        $contenido = $this->extractLabeledQuotedValue($input, ['contenido']);
+
+        if (! $integracion || ! $integracion->repositorio_url) {
+            return $this->assistantResponse(
+                "El proyecto \"{$project->nombre}\" no tiene una URL de GitHub configurada."
+            );
+        }
+
+        if (! config('services.github.token')) {
+            return $this->assistantResponse(
+                'No puedo autorizar commits porque GITHUB_TOKEN no está configurado en .env.'
+            );
+        }
+
+        if (! $mensaje || ! $ruta || $contenido === null) {
+            $cambios = app(ProyectoController::class)->cambiosLocalesPublicables();
+
+            if ($cambios['error']) {
+                return $this->assistantResponse("No pude revisar los cambios locales: {$cambios['error']}");
+            }
+
+            if ($cambios['files'] === []) {
+                return $this->assistantResponse(
+                    "No encontré cambios locales publicables en \"{$project->nombre}\". ".
+                    'Los archivos .env, vendor, node_modules, storage y cache se excluyen por seguridad.'
+                );
+            }
+
+            $mensaje = $mensaje ?: $this->commitMessageFromInstruction($input, $project);
+            $rama = $integracion->rama_principal ?: 'main';
+            $repositorio = $integracion->repositorio_propietario && $integracion->repositorio_nombre
+                ? "{$integracion->repositorio_propietario}/{$integracion->repositorio_nombre}"
+                : $integracion->repositorio_url;
+            $lista = collect($cambios['files'])
+                ->map(fn (array $file) => "- {$file['path']} ({$file['status']})")
+                ->implode("\n");
+
+            return [
+                'message' => [
+                    'role' => 'assistant',
+                    'content' => "Detecté cambios locales en \"{$project->nombre}\".\n\n".
+                        "Repositorio: {$repositorio}\n".
+                        "Rama: {$rama}\n".
+                        "Mensaje: {$mensaje}\n".
+                        "Archivos que se publicarán:\n{$lista}\n\n".
+                        'Se creará un único commit con estos archivos. No se subirán secretos ni dependencias generadas. '.
+                        '¿Confirmas? Responde "sí, confirmar" o "cancelar".',
+                ],
+                'navigation' => null,
+                'pending_action' => [
+                    'type' => 'github_local_commit',
+                    'project_id' => $project->id,
+                    'data' => [
+                        'mensaje' => $mensaje,
+                        'rama' => $rama,
+                    ],
+                ],
+            ];
+        }
+
+        if (str_starts_with($ruta, '/') || str_contains($ruta, '..')) {
+            return $this->assistantResponse(
+                'La ruta del archivo no es válida. Usa una ruta relativa al repositorio, por ejemplo app/README.md.'
+            );
+        }
+
+        $rama = $integracion->rama_principal ?: 'main';
+        $repositorio = $integracion->repositorio_propietario && $integracion->repositorio_nombre
+            ? "{$integracion->repositorio_propietario}/{$integracion->repositorio_nombre}"
+            : $integracion->repositorio_url;
+
+        return [
+            'message' => [
+                'role' => 'assistant',
+                'content' => "Preparé un commit para \"{$project->nombre}\".\n\n".
+                    "Repositorio: {$repositorio}\n".
+                    "Rama: {$rama}\n".
+                    "Archivo: {$ruta}\n".
+                    "Mensaje: {$mensaje}\n\n".
+                    'La acción creará o actualizará ese archivo en GitHub y registrará la actualización en DevControl. '.
+                    '¿Confirmas? Responde "sí, confirmar" o "cancelar".',
+            ],
+            'navigation' => null,
+            'pending_action' => [
+                'type' => 'github_commit',
+                'project_id' => $project->id,
+                'data' => [
+                    'mensaje' => $mensaje,
+                    'ruta' => $ruta,
+                    'contenido' => $contenido,
+                    'rama' => $rama,
+                ],
+            ],
+        ];
+    }
+
+    private function extractLabeledQuotedValue(string $input, array $labels): ?string
+    {
+        $labelPattern = implode('|', array_map(
+            fn (string $label) => preg_quote($label, '/'),
+            $labels
+        ));
+
+        return preg_match(
+            '/(?:'.$labelPattern.')\s*[:=]?\s*["“](.*?)["”]/isu',
+            $input,
+            $matches
+        ) === 1
+            ? trim($matches[1])
+            : null;
+    }
+
+    private function commitMessageFromInstruction(string $input, Proyecto $project): string
+    {
+        $quotedMessage = $this->extractLabeledQuotedValue($input, ['mensaje del commit', 'mensaje']);
+        if ($quotedMessage) {
+            return $quotedMessage;
+        }
+
+        $position = mb_stripos($input, $project->nombre, 0, 'UTF-8');
+        $suffix = $position === false
+            ? ''
+            : trim(mb_substr($input, $position + mb_strlen($project->nombre, 'UTF-8'), null, 'UTF-8'));
+        $suffix = preg_replace('/^[\s:,\-]+/u', '', $suffix) ?? $suffix;
+        $suffix = preg_replace('/^(del proyecto|en el proyecto)\b/iu', '', $suffix) ?? $suffix;
+        $suffix = trim($suffix, " \t\n\r\0\x0B.,:;-");
+
+        return $suffix !== ''
+            ? ucfirst($suffix)
+            : "Sincroniza cambios locales de {$project->nombre}";
     }
 
     private function projectMentionedInText(string $text): ?Proyecto
@@ -1364,6 +2002,8 @@ class AsistenteController extends Controller
             "• Revisar secciones: \"qué módulos faltan\", \"compara las secciones con lo implementado\".\n".
             "• Consultar Nexus: \"muéstrame los hallazgos\", \"auditoría completa\", \"estado de salud\" o \"resumen por proyecto\".\n".
             "• Ver propuestas sin aplicar cambios: \"muéstrame propuestas de solución\" o \"cómo arreglo los hallazgos\".\n".
+            "• Crear proyectos desde un prompt estructurado: incluye nombre, descripción, contexto, objetivo, reglas y secciones; Nexus mostrará un resumen y pedirá confirmación antes de guardar.\n".
+            "• Crear commits en GitHub: indica proyecto, mensaje, ruta y contenido completo; Nexus detectará el repositorio configurado y pedirá confirmación antes de publicar.\n".
             "• Registrar incidencias: \"crea una incidencia \\\"API no responde\\\" en DevControl, prioridad alta, descripción: timeout intermitente\".\n".
             "• Vigilar el código local: ejecuta \"php artisan nexus:watch\" para revisar cambios en app, routes, config, database y resources sin modificar archivos.\n".
             "• Crear la tarea de integración de IA cuando me lo pidas.\n\n".
@@ -1851,6 +2491,11 @@ class AsistenteController extends Controller
         DB::transaction(function () use ($proyecto, $findings, $functionalities, &$created, &$resolved, &$tasksCreated) {
             foreach ($functionalities['statuses'] as $status) {
                 $status['functionality']->update(['estado' => $status['estado']]);
+
+                if ($status['estado'] === 'Implementada') {
+                    $completed = $this->completeGeneratedFunctionalityTask($proyecto, $status['functionality']);
+                    $tasksCreated += $completed ? 1 : 0;
+                }
             }
 
             $bugFindings = collect($findings)
@@ -1944,10 +2589,13 @@ class AsistenteController extends Controller
                 $total++;
                 $evidence = $this->findLocalEvidence($funcionalidad);
                 $hasEvidence = $evidence->isNotEmpty();
-                $isImplemented = $this->hasFunctionalImplementation($funcionalidad, $evidence);
+                $isImplemented = $this->hasFunctionalImplementation($seccion, $funcionalidad, $evidence);
+                $wasExplicitlyImplemented = $funcionalidad->estado === 'Implementada';
+                $hasInProgressContext = in_array($funcionalidad->estado, ['Parcial', 'En desarrollo'], true);
+                $isImplemented = $wasExplicitlyImplemented || $isImplemented;
                 $newStatus = $isImplemented
                     ? 'Implementada'
-                    : ($hasEvidence ? 'En progreso' : 'Pendiente');
+                    : ($hasInProgressContext ? 'En progreso' : 'Pendiente');
                 $statuses[] = [
                     'functionality' => $funcionalidad,
                     'estado' => $newStatus,
@@ -1958,19 +2606,22 @@ class AsistenteController extends Controller
                     ? $this->functionalityTaskDescription($funcionalidad, true, $evidence)
                     : ($hasEvidence
                     ? $this->functionalityTaskDescription($funcionalidad, false, $evidence)
-                    : "No se encontró evidencia suficiente para \"{$funcionalidad->nombre}\". Revisar el alcance, localizar los archivos relacionados y completar la implementación.");
+                    : $this->functionalityTaskDescription($funcionalidad, false, collect()));
 
-                $tasks[] = [
-                    'title' => "Verificar funcionalidad: {$funcionalidad->nombre}",
-                    'description' => $taskDescription,
-                    'priority' => $isImplemented ? 'Baja' : ($hasEvidence ? 'Media' : 'Alta'),
-                    'completed' => $isImplemented,
-                    'seccion_id' => $seccion->id,
-                    'funcionalidad_id' => $funcionalidad->id,
-                    'evidence' => $evidence->implode("\n"),
-                ];
+                if (! $isImplemented) {
+                    $tasks[] = [
+                        'title' => "Completar funcionalidad: {$funcionalidad->nombre}",
+                        'description' => $taskDescription,
+                        'priority' => $hasInProgressContext ? 'Media' : 'Alta',
+                        'completed' => false,
+                        'in_progress' => $hasInProgressContext,
+                        'seccion_id' => $seccion->id,
+                        'funcionalidad_id' => $funcionalidad->id,
+                        'evidence' => $evidence->implode("\n"),
+                    ];
+                }
 
-                if (! $hasEvidence) {
+                if (! $hasEvidence && ! $isImplemented) {
                     $findings[] = [
                         'title' => "[IA] Funcionalidad sin evidencia local: {$funcionalidad->nombre}",
                         'description' => $this->formatFindingDescription(
@@ -2039,26 +2690,67 @@ class AsistenteController extends Controller
         return $evidence->unique()->values();
     }
 
-    private function hasFunctionalImplementation($funcionalidad, $evidence): bool
+    private function hasFunctionalImplementation($seccion, $funcionalidad, $evidence): bool
     {
+        $section = $this->normalizeInstruction($seccion->nombre);
         $name = $this->normalizeInstruction($funcionalidad->nombre);
-        $files = $evidence->implode("\n");
 
         $requirements = match (true) {
+            $section === 'bugs' => [
+                'routes web php',
+                'bugcontroller',
+                str_contains($name, 'registrar') ? 'bugs store' : 'bugs index',
+                str_contains($name, 'editar') ? 'bugs update' : 'bugcontroller',
+                str_contains($name, 'eliminar') ? 'bugs destroy' : 'bugcontroller',
+            ],
+            $section === 'tareas' => [
+                'routes web php',
+                'tareascontroller',
+                'dashboard tareas',
+            ],
+            $section === 'actualizaciones' => [
+                'routes web php',
+                'actualizacioncontroller',
+                str_contains($name, 'registrar') ? 'actualizaciones store' : 'actualizaciones',
+            ],
+            $section === 'incidentes' => [
+                'routes web php',
+                'incidentecontroller',
+                'incidentes',
+            ],
+            $section === 'usuarios' => [
+                'routes web php',
+                'usuariocontroller',
+                str_contains($name, 'crear') ? 'usuarios store' : 'usuarios',
+            ],
+            $section === 'acceso' => [
+                'routes web php',
+                str_contains($name, 'registro') ? 'registercontroller' : 'loginccontroller',
+            ],
+            $section === 'asistente ia nexus' => [
+                'routes web php',
+                'asistentecontroller',
+                'dashboard asistente',
+            ],
+            $section === 'dashboard' => [
+                'routes web php',
+                'dashboard',
+                'resources views admin index blade php',
+            ],
             str_contains($name, 'crear') && str_contains($name, 'proyecto'),
             str_contains($name, 'registrar') && str_contains($name, 'proyecto') => [
-                'app http controllers proyectocontroller php',
                 'routes web php',
-                'resources views admin proyectos blade php',
-                'store',
+                'proyectos store',
             ],
             (str_contains($name, 'editar') || str_contains($name, 'modificar'))
                 && str_contains($name, 'proyecto') => [
-                    'app http controllers proyectocontroller php',
                     'routes web php',
-                    'resources views admin proyectos blade php',
-                    'update',
+                    'proyectos update',
                 ],
+            str_contains($name, 'consultar') && str_contains($name, 'proyecto') => [
+                'routes web php',
+                'proyectos index',
+            ],
             (str_contains($name, 'registrar') || str_contains($name, 'egistrar'))
                 && str_contains($name, 'tecnolog') => [
                     'app http controllers proyectocontroller php',
@@ -2072,9 +2764,8 @@ class AsistenteController extends Controller
                 'progreso',
             ],
             str_contains($name, 'eliminar') || str_contains($name, 'archivar') => [
-                'app http controllers proyectocontroller php',
                 'routes web php',
-                'destroy',
+                'proyectos destroy',
             ],
             str_contains($name, 'listado') || str_contains($name, 'listar') => [
                 'app http controllers proyectocontroller php',
@@ -2087,6 +2778,26 @@ class AsistenteController extends Controller
                 'routes web php',
                 'resources views admin proyectos blade php',
                 'show',
+            ],
+            str_contains($name, 'administrar informacion') && str_contains($name, 'proyecto') => [
+                'app http controllers proyectocontroller php',
+                'app models proyecto php',
+                'resources views admin proyectos blade php',
+            ],
+            str_contains($name, 'administrar tareas relacionadas') => [
+                'app http controllers proyectocontroller php',
+                'app models tarea php',
+                'tareas',
+            ],
+            str_contains($name, 'administrar bugs relacionados') => [
+                'app http controllers proyectocontroller php',
+                'app models bug php',
+                'bugs',
+            ],
+            str_contains($name, 'administrar actualizaciones') => [
+                'app http controllers proyectocontroller php',
+                'app models actualizacion php',
+                'actualizaciones',
             ],
             default => [],
         };
@@ -2103,12 +2814,39 @@ class AsistenteController extends Controller
             }
         }
 
-        return $files !== '';
+        return $requirements !== [] && collect($requirements)->every(
+            fn (string $requirement) => str_contains($contents, $requirement)
+        );
     }
 
     private function functionalityTaskDescription($funcionalidad, bool $implemented, $evidence): string
     {
         $name = $this->normalizeInstruction($funcionalidad->nombre);
+        $section = $this->normalizeInstruction($funcionalidad->seccion?->nombre ?? 'la seccion correspondiente');
+
+        if (! $implemented && $section === 'notificaciones') {
+            return "La sección Notificaciones todavía está en desarrollo. Para \"{$funcionalidad->nombre}\", definir el evento que debe generar la alerta, sus destinatarios, el canal de entrega y la forma de marcarla como leída. No marcarla como implementada mientras solo exista la pantalla o una ruta de demostración.";
+        }
+
+        if (! $implemented && $section === 'monitoreo') {
+            return "La sección Monitoreo todavía está en desarrollo. Para \"{$funcionalidad->nombre}\", definir qué servicio o repositorio se observará, cómo se consultará su estado y cómo se registrarán errores o indisponibilidad. La vista preparada no demuestra una integración operativa.";
+        }
+
+        if (! $implemented && $section === 'archivos') {
+            return "La sección Archivos es parcial. Para \"{$funcionalidad->nombre}\", conectar almacenamiento persistente, permisos, validación del archivo y la operación solicitada. Verificar carga, consulta y eliminación antes de cambiar el estado.";
+        }
+
+        if (! $implemented && $section === 'configuracion') {
+            return "La sección Configuración está en desarrollo. Para \"{$funcionalidad->nombre}\", conectar el formulario con su configuración real, validar los datos y confirmar que el cambio se conserve y afecte al módulo correspondiente.";
+        }
+
+        if (! $implemented && $section === 'seguimiento') {
+            return "La sección Seguimiento está en desarrollo. Para \"{$funcionalidad->nombre}\", definir qué avance se registra, de qué proyecto o proceso proviene y cómo se consulta posteriormente. No basta con mostrar una vista estática.";
+        }
+
+        if (! $implemented && $section === 'notas') {
+            return "La sección Notas está en desarrollo. Para \"{$funcionalidad->nombre}\", implementar persistencia, relación con el proyecto, edición segura y validación de permisos. Verificar el ciclo completo antes de marcarla como implementada.";
+        }
 
         if (str_contains($name, 'control de progreso') || str_contains($name, 'progreso')) {
             return $implemented
@@ -2153,9 +2891,17 @@ class AsistenteController extends Controller
                 : 'Completar la baja o archivado de proyectos definiendo la confirmación, el estado resultante y la conservación del historial.';
         }
 
-        return $implemented
-            ? "La funcionalidad \"{$funcionalidad->nombre}\" cuenta con el flujo principal implementado y relacionado con el módulo correspondiente. La tarea queda verificada."
-            : "La funcionalidad \"{$funcionalidad->nombre}\" tiene parte del flujo relacionado, pero requiere revisar su comportamiento completo, validaciones y criterios antes de marcarla como implementada.";
+        if ($implemented) {
+            return "La funcionalidad \"{$funcionalidad->nombre}\" ya tiene evidencia del flujo principal. No requiere trabajo adicional; se conserva como implementada.";
+        }
+
+        $evidenceNote = $evidence->isNotEmpty()
+            ? 'Hay indicios en el código, pero falta comprobar el flujo completo y sus validaciones.'
+            : 'No se encontró una ruta, controlador, modelo o vista que permita confirmar el flujo completo.';
+
+        return "Revisar \"{$funcionalidad->nombre}\" dentro de {$funcionalidad->seccion?->nombre}. ".
+            "Definir el resultado esperado, completar únicamente las partes faltantes y validar el flujo de inicio a fin antes de cambiar su estado a Implementada.\n\n".
+            $evidenceNote;
     }
 
     private function loadLocalProjectContents(): string
@@ -2330,6 +3076,13 @@ class AsistenteController extends Controller
     private function createTaskForFinding(Proyecto $proyecto, array $finding): bool
     {
         $marker = '[DevControl::task]';
+        if (($finding['funcionalidad_id'] ?? null)
+            && $proyecto->secciones
+                ->flatMap(fn ($section) => $section->funcionalidades)
+                ->firstWhere('id', $finding['funcionalidad_id'])?->estado === 'Implementada') {
+            return false;
+        }
+
         $existing = $proyecto->tareas
             ->first(fn (Tarea $tarea) => str_contains((string) $tarea->descripcion, $marker)
                 && str_contains((string) $tarea->descripcion, $finding['title']));
@@ -2358,19 +3111,32 @@ class AsistenteController extends Controller
 
     private function createTaskForFunctionality(Proyecto $proyecto, array $task): bool
     {
+        $legacyTitle = 'Verificar funcionalidad: '.str_replace('Completar funcionalidad: ', '', $task['title']);
         $existing = $proyecto->tareas
             ->first(fn (Tarea $tarea) => $tarea->funcionalidad_id === $task['funcionalidad_id']
-                && ($tarea->titulo === $task['title']
-                    || str_contains((string) $tarea->descripcion, '[DevControl::functionality-task]')));
+                && (
+                    str_contains((string) $tarea->descripcion, '[DevControl::functionality-task]')
+                    || in_array($tarea->titulo, [$task['title'], $legacyTitle], true)
+                ));
+
+        if (! $existing) {
+            $existing = $proyecto->tareas
+                ->first(fn (Tarea $tarea) => in_array($tarea->titulo, [$task['title'], $legacyTitle], true));
+        }
 
         if ($existing) {
             $existing->update([
+                'seccion_id' => $task['seccion_id'],
+                'funcionalidad_id' => $task['funcionalidad_id'],
                 'titulo' => $task['title'],
                 'descripcion' => $task['description'],
                 'prioridad' => $task['priority'],
+                'estado' => $existing->estado === 'Cancelado'
+                    ? 'Cancelado'
+                    : ($task['in_progress'] ? 'En progreso' : 'Pendiente'),
             ]);
 
-            return ! in_array($existing->estado, ['Completado', 'Cancelado'], true);
+            return false;
         }
 
         Tarea::create([
@@ -2379,9 +3145,9 @@ class AsistenteController extends Controller
             'seccion_id' => $task['seccion_id'],
             'funcionalidad_id' => $task['funcionalidad_id'],
             'titulo' => $task['title'],
-            'descripcion' => $task['description'],
+            'descripcion' => "[DevControl::functionality-task]\n".$task['description'],
             'prioridad' => $task['priority'],
-            'estado' => $task['completed'] ? 'Completado' : 'En progreso',
+            'estado' => $task['completed'] ? 'Completado' : ($task['in_progress'] ? 'En progreso' : 'Pendiente'),
             'fecha_inicio' => now()->toDateString(),
             'fecha_limite' => now()->addDays(14)->toDateString(),
             'fecha_completada' => $task['completed'] ? now()->toDateString() : null,
@@ -2409,6 +3175,43 @@ class AsistenteController extends Controller
             'estado' => 'Completado',
             'fecha_completada' => now()->toDateString(),
             'descripcion' => $task['description'],
+        ]);
+
+        return true;
+    }
+
+    private function completeGeneratedFunctionalityTask(Proyecto $proyecto, $funcionalidad): bool
+    {
+        $task = $proyecto->tareas
+            ->first(fn (Tarea $tarea) => $tarea->funcionalidad_id === $funcionalidad->id
+                && (
+                    str_contains((string) $tarea->descripcion, '[DevControl::functionality-task]')
+                    || $tarea->titulo === "Verificar funcionalidad: {$funcionalidad->nombre}"
+                    || $tarea->titulo === "Completar funcionalidad: {$funcionalidad->nombre}"
+                )
+                && $tarea->estado !== 'Completado');
+
+        if (! $task) {
+            $legacyTitles = [
+                "Verificar funcionalidad: {$funcionalidad->nombre}",
+                "Completar funcionalidad: {$funcionalidad->nombre}",
+            ];
+            $task = $proyecto->tareas
+                ->first(fn (Tarea $tarea) => in_array($tarea->titulo, $legacyTitles, true)
+                    && $tarea->estado !== 'Completado');
+        }
+
+        if (! $task) {
+            return false;
+        }
+
+        $task->update([
+            'seccion_id' => $funcionalidad->seccion_id,
+            'funcionalidad_id' => $funcionalidad->id,
+            'estado' => 'Completado',
+            'fecha_completada' => now()->toDateString(),
+            'descripcion' => (string) $task->descripcion."\n\n".
+                'Nexus verificó que la funcionalidad relacionada está implementada.',
         ]);
 
         return true;

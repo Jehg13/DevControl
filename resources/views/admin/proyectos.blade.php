@@ -1260,7 +1260,26 @@
                                         Sincronizar ahora
                                     </button>
                                 </form>
+                                <form method="POST" action="{{ route('proyectos.github.analyze', $proyectoActual) }}">
+                                    @csrf
+                                    <button type="submit"
+                                            class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm font-bold text-emerald-400 transition hover:bg-emerald-500/20">
+                                        Analizar repositorio
+                                    </button>
+                                </form>
                             </div>
+                            <form method="POST" action="{{ route('proyectos.github.commit', $proyectoActual) }}" class="mt-4 grid gap-3 rounded-xl border border-white/10 bg-black/20 p-4">
+                                @csrf
+                                <p class="text-xs text-gray-500">Crear un commit explícito en la rama configurada. Requiere <code>GITHUB_TOKEN</code> con permiso de contenido.</p>
+                                <div class="grid gap-3 sm:grid-cols-2">
+                                    <input name="mensaje" required maxlength="500" placeholder="Mensaje del commit" class="rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white">
+                                    <input name="ruta" required maxlength="500" placeholder="Ruta, por ejemplo README.md" class="rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white">
+                                </div>
+                                <textarea name="contenido" required maxlength="1000000" rows="5" placeholder="Contenido completo del archivo" class="rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white"></textarea>
+                                <button type="submit" class="w-fit rounded-xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-2.5 text-sm font-bold text-yellow-300 transition hover:bg-yellow-500/20">
+                                    Crear commit autorizado
+                                </button>
+                            </form>
                         @else
                             <p class="mt-4 text-sm text-gray-600">
                                 Guarda una URL de GitHub en la configuración del proyecto para preparar la integración.

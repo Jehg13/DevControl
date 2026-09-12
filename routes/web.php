@@ -61,6 +61,8 @@ Route::delete('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'de
 Route::get('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'show'])->name('proyectos.show');
 Route::post('/dashboard/proyectos/{proyecto}/github/sincronizar', [ProyectoController::class, 'sincronizarGithub'])->name('proyectos.github.sync');
 Route::post('/dashboard/proyectos/{proyecto}/github/manual', [ProyectoController::class, 'configurarGithubManual'])->name('proyectos.github.manual');
+Route::post('/dashboard/proyectos/{proyecto}/github/analizar', [ProyectoController::class, 'analizarGithub'])->name('proyectos.github.analyze');
+Route::post('/dashboard/proyectos/{proyecto}/github/commit', [ProyectoController::class, 'crearCommitGithub'])->name('proyectos.github.commit');
 Route::resource('/dashboard/tareas', TareasController::class);
 Route::get('/dashboard/actualizaciones', [ActualizacionController::class, 'index'])->name('actualizaciones');
 Route::post('/dashboard/actualizaciones', [ActualizacionController::class, 'store'])->name('actualizaciones.store');

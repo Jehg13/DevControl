@@ -33,6 +33,8 @@ return [
 
     'github' => [
         'ca_bundle' => env('GITHUB_CA_BUNDLE'),
+        'token' => env('GITHUB_TOKEN'),
+        'git_binary' => env('GIT_BINARY'),
     ],
 
 ];
