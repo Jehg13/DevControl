@@ -150,7 +150,7 @@
                     border border-white/10 bg-white/5 px-3 py-3">
 
             <img
-                src="{{ $usuarioActual['foto'] ?? asset('storage/images/jesus-guerra.jpg') }}"
+                src="{{ $usuarioActual['foto'] ?? asset('favicon.ico') }}"
                 alt="Foto de {{ $usuarioActual['nombre'] ?? 'Jesús Guerra' }}"
                 class="h-10 w-10 shrink-0 rounded-full
                        border border-white/10 object-cover">
@@ -517,6 +517,11 @@
                         </svg>
                         Crear proyecto
                     </button>
+                    <button type="button"
+                            onclick="openProjectModal('vincular')"
+                            class="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-2.5 text-sm font-bold text-purple-300 transition hover:bg-purple-500/20">
+                        Vincular o importar
+                    </button>
                 </div>
 
             </div>
@@ -799,6 +804,11 @@
 
                             Crear proyecto
 
+                        </button>
+                        <button type="button"
+                                onclick="openProjectModal('vincular')"
+                                class="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-2.5 text-sm font-semibold text-purple-300 transition hover:bg-purple-500/20">
+                            Vincular desde GitHub
                         </button>
 
 
@@ -1265,6 +1275,14 @@
                                     <button type="submit"
                                             class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm font-bold text-emerald-400 transition hover:bg-emerald-500/20">
                                         Analizar repositorio
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ route('proyectos.github.import', $proyectoActual) }}">
+                                    @csrf
+                                    <button type="submit"
+                                            onclick="return confirm('Esto reemplazará las secciones importadas y agregará como completados los elementos detectados. ¿Continuar?')"
+                                            class="rounded-xl border border-purple-500/20 bg-purple-500/10 px-4 py-2.5 text-sm font-bold text-purple-300 transition hover:bg-purple-500/20">
+                                        Importar proyecto completo
                                     </button>
                                 </form>
                             </div>
@@ -2255,7 +2273,7 @@
 
             {{-- NOMBRE --}}
 
-            <div>
+            <div id="campoNombreProyecto">
 
                 <label for="nombre"
                        class="mb-1.5 block text-sm
@@ -2282,7 +2300,7 @@
 
             {{-- DESCRIPCIÓN --}}
 
-            <div>
+            <div id="campoDescripcionProyecto">
 
                 <label for="descripcion"
                        class="mb-1.5 block text-sm
@@ -2306,7 +2324,7 @@
 
             </div>
 
-            <div>
+            <div id="campoContextoProyecto">
                 <label for="contexto" class="mb-1.5 block text-sm font-semibold text-gray-300">
                     Contexto del proyecto
                 </label>
@@ -2317,7 +2335,7 @@
                                  transition focus:border-[#d61f2c]"></textarea>
             </div>
 
-            <div>
+            <div id="campoObjetivoProyecto">
                 <label for="objetivo" class="mb-1.5 block text-sm font-semibold text-gray-300">
                     Objetivo principal
                 </label>
@@ -2328,7 +2346,7 @@
                                  transition focus:border-[#d61f2c]"></textarea>
             </div>
 
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div id="campoDetallesProyecto" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                     <label for="tecnologias" class="mb-1.5 block text-sm font-semibold text-gray-300">
                         Tecnologías
@@ -2361,7 +2379,7 @@
                               text-white placeholder-gray-600 outline-none transition focus:border-[#d61f2c]">
             </div>
 
-            <div class="border-t border-white/10 pt-4">
+            <div id="campoSeccionesProyecto" class="border-t border-white/10 pt-4">
                 <div class="flex items-center justify-between gap-3">
                     <div>
                         <h3 class="font-display font-bold text-white">Secciones y funcionalidades</h3>
@@ -2645,6 +2663,9 @@
     const proyectoStoreUrl =
         @json(route('proyectos.store'));
 
+    const proyectoImportUrl =
+        @json(route('proyectos.import'));
+
 
     const proyectoUpdateUrlTemplate =
         @json(route('proyectos.update', ['proyecto' => '__ID__']));
@@ -2758,7 +2779,18 @@
 
         form.reset();
         resetSections();
-
+        document.getElementById('fecha_inicio').required = true;
+        document.getElementById('repositorio_url').required = false;
+        [
+            'campoNombreProyecto',
+            'campoDescripcionProyecto',
+            'campoContextoProyecto',
+            'campoObjetivoProyecto',
+            'campoDetallesProyecto',
+            'campoSeccionesProyecto',
+        ].forEach(id => document.getElementById(id)?.classList.remove('hidden'));
+        document.getElementById('fecha_inicio').closest('.grid')?.classList.remove('hidden');
+        document.getElementById('nombre').required = true;
 
         /*
         |--------------------------------------------------------------------------
@@ -2805,6 +2837,25 @@
 
             document.getElementById('fecha_inicio').value =
                 hoy;
+
+        } else if (mode === 'vincular') {
+            title.textContent = 'Vincular o importar proyecto desde GitHub';
+            form.action = proyectoImportUrl;
+            methodInput.value = 'POST';
+            submitBtn.textContent = 'Vincular e importar proyecto';
+            document.getElementById('nombre').value = 'Proyecto importado';
+            document.getElementById('nombre').required = false;
+            [
+                'campoNombreProyecto',
+                'campoDescripcionProyecto',
+                'campoContextoProyecto',
+                'campoObjetivoProyecto',
+                'campoDetallesProyecto',
+                'campoSeccionesProyecto',
+            ].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('fecha_inicio').closest('.grid')?.classList.add('hidden');
+            document.getElementById('repositorio_url').required = true;
+            document.getElementById('fecha_inicio').required = false;
 
         }
 

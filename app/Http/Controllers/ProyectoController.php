@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Actualizacion;
 use App\Models\Proyecto;
+use App\Models\Tarea;
 use App\Models\Configuracion;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
@@ -320,6 +321,29 @@ class ProyectoController extends Controller
             );
     }
 
+    public function importarProyecto(Request $request)
+    {
+        $datos = $request->validate([
+            'repositorio_url' => ['required', 'url', 'max:500'],
+        ]);
+        $partes = $this->partesRepositorioGithub($datos['repositorio_url']);
+
+        if (! $partes) {
+            return back()->withInput()->with('error', 'La URL debe ser un repositorio válido de GitHub.');
+        }
+
+        $proyecto = Proyecto::create([
+            'nombre' => $partes['repo'],
+            'repositorio_url' => $datos['repositorio_url'],
+            'fecha_inicio' => today(),
+            'estado' => 'Activo',
+            'progreso' => 0,
+        ]);
+        $this->guardarIntegracionGithub($proyecto);
+
+        return $this->importarGithub($proyecto);
+    }
+
     /**
      * Actualizar proyecto.
      */
@@ -573,6 +597,616 @@ class ProyectoController extends Controller
 
         return back()->with('success', 'Repositorio configurado manualmente.');
     }
+
+    /**
+     * Importa la documentación y la estructura de un repositorio existente.
+     */
+        public function importarGithub(Proyecto $proyecto)
+        {
+            $integracion = $proyecto->integracionGithub;
+            $partes = $integracion ? $this->partesRepositorioGithub($integracion->repositorio_url) : null;
+            if (! $partes) {
+                return back()->with('error', 'Configura una URL válida de GitHub antes de importar el proyecto.');
+            }
+
+            try {
+                $cliente = $this->clienteGithub((bool) config('services.github.token'));
+                $repositorio = $cliente
+                    ->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}")
+                    ->throw()
+                    ->json();
+                $rama = $repositorio['default_branch'] ?? 'main';
+                $arbol = $cliente
+                    ->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/trees/{$rama}", ['recursive' => '1'])
+                    ->throw()
+                    ->json();
+                $archivos = collect($arbol['tree'] ?? [])
+                    ->where('type', 'blob')
+                    ->pluck('path')
+                    ->filter(fn (string $path): bool => ! str_starts_with($path, '.git/'));
+                $readme = $this->leerReadmeGithub($cliente, $partes, $rama);
+                $datos = $this->extraerDocumentacionGithub($readme);
+                $analisisCodigo = $this->analizarCodigoGithub($cliente, $partes, $rama, $archivos);
+                $secciones = $this->combinarSeccionesRepositorio(
+                    $this->seccionesDesdeRepositorio($readme, $archivos),
+                    $analisisCodigo
+                );
+                $secciones = $this->combinarSeccionesRepositorio(
+                    $secciones,
+                    $this->seccionesFuncionalesDesdeRepositorio($cliente, $partes, $rama, $archivos)
+                );
+                $datos['descripcion'] = $datos['descripcion'] ?: ($repositorio['description'] ?? '');
+                $datos['contexto'] = $datos['contexto'] ?: $this->contextoDesdeCodigo($analisisCodigo, $archivos, $readme, $repositorio['name'] ?? $partes['repo']);
+                $datos['objetivo'] = $datos['objetivo'] ?: $this->objetivoDesdeCodigo($analisisCodigo, $datos['contexto']);
+                $datos['descripcion'] = $datos['descripcion'] ?: $this->descripcionDesdeContexto($datos['contexto']);
+                $datos['tecnologias'] = $datos['tecnologias'] ?: $this->tecnologiasDesdeCodigo($archivos);
+
+                DB::transaction(function () use ($proyecto, $integracion, $repositorio, $partes, $rama, $datos, $secciones, $archivos): void {
+                    $proyecto->tareas()
+                        ->where('titulo', 'like', 'Implementado:%')
+                        ->delete();
+                    $proyecto->update([
+                        'nombre' => $datos['nombre'] ?: ($repositorio['name'] ?? $partes['repo']),
+                        'descripcion' => $datos['descripcion'] ?: $proyecto->descripcion,
+                        'contexto' => $datos['contexto'] ?: $proyecto->contexto,
+                        'objetivo' => $datos['objetivo'] ?: $proyecto->objetivo,
+                        'tecnologias' => $datos['tecnologias'] ?: $proyecto->tecnologias,
+                        'repositorio_url' => $repositorio['html_url'] ?? $integracion->repositorio_url,
+                    ]);
+                    $proyecto->secciones()->delete();
+                    foreach ($secciones as $seccionIndex => $seccionData) {
+                        $seccion = $proyecto->secciones()->create([
+                            'nombre' => $seccionData['nombre'],
+                            'descripcion' => $seccionData['descripcion'],
+                            'orden' => $seccionIndex,
+                        ]);
+                        foreach ($seccionData['funcionalidades'] as $funcionalidadIndex => $funcionalidad) {
+                            $nombreFuncionalidad = is_array($funcionalidad) ? $funcionalidad['nombre'] : $funcionalidad;
+                            $descripcionFuncionalidad = is_array($funcionalidad)
+                                ? $funcionalidad['descripcion']
+                                : 'Capacidad detectada en el código fuente del módulo.';
+                            $registro = $seccion->funcionalidades()->create([
+                                'nombre' => $nombreFuncionalidad,
+                                'descripcion' => $descripcionFuncionalidad,
+                                'estado' => 'Implementada',
+                                'orden' => $funcionalidadIndex,
+                            ]);
+                            $titulo = "Implementado: {$nombreFuncionalidad}";
+                            Tarea::create([
+                                'proyecto_id' => $proyecto->id,
+                                'seccion_id' => $seccion->id,
+                                'funcionalidad_id' => $registro->id,
+                                'titulo' => $titulo,
+                                'descripcion' => $descripcionFuncionalidad,
+                                'prioridad' => 'Media',
+                                'estado' => 'Completado',
+                                'fecha_completada' => today(),
+                            ]);
+                        }
+                    }
+
+                    $integracion->update([
+                        'repositorio_propietario' => $repositorio['owner']['login'] ?? $partes['owner'],
+                        'repositorio_nombre' => $repositorio['name'] ?? $partes['repo'],
+                        'rama_principal' => $rama,
+                        'estado' => 'sincronizado',
+                        'ultima_sincronizacion' => now(),
+                        'ultimo_error' => null,
+                    ]);
+                    $this->guardarIntegracionGithub($proyecto->fresh());
+                });
+
+                return back()->with('success', "Proyecto importado: se analizaron {$archivos->count()} archivos, {$secciones->count()} secciones y funcionalidades detectadas en el código.");
+            } catch (ConnectionException $exception) {
+                return back()->with('error', 'No se pudo conectar con GitHub para importar el proyecto.');
+            } catch (RequestException $exception) {
+                return back()->with('error', $exception->response?->json('message') ?? 'GitHub rechazó la importación.');
+            }
+        }
+
+        private function leerReadmeGithub($cliente, array $partes, string $rama): string
+        {
+            foreach (['README.md', 'readme.md', 'README.MD'] as $nombre) {
+                $respuesta = $cliente->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/contents/{$nombre}", ['ref' => $rama]);
+                if ($respuesta->successful()) {
+                    return base64_decode((string) $respuesta->json('content'), true) ?: '';
+                }
+            }
+
+            return '';
+        }
+
+        private function extraerDocumentacionGithub(string $readme): array
+        {
+            $lineas = preg_split('/\R/', $readme) ?: [];
+            $secciones = [];
+            $actual = null;
+            foreach ($lineas as $linea) {
+                if (preg_match('/^#{1,3}\s+(.+)$/', trim($linea), $coincidencia)) {
+                    $actual = strtolower(trim($coincidencia[1]));
+                    $secciones[$actual] = [];
+                    continue;
+                }
+                if ($actual) {
+                    $secciones[$actual][] = trim($linea);
+                }
+            }
+            $texto = fn (array $lineas): string => trim(preg_replace('/\s+/', ' ', implode(' ', array_filter($lineas))));
+            $descripcion = $texto($secciones['descripción'] ?? $secciones['description'] ?? []);
+            $contexto = $texto($secciones['contexto'] ?? $secciones['about'] ?? $secciones['acerca de'] ?? []);
+            $objetivo = $texto($secciones['objetivo'] ?? $secciones['purpose'] ?? $secciones['goals'] ?? []);
+            $tecnologias = $texto($secciones['tecnologías'] ?? $secciones['tecnologias'] ?? $secciones['technologies'] ?? $secciones['tech stack'] ?? []);
+
+            return [
+                'nombre' => trim((string) (preg_match('/^#\s+(.+)$/m', $readme, $coincidencia) ? $coincidencia[1] : '')),
+                'descripcion' => $descripcion,
+                'contexto' => $contexto,
+                'objetivo' => $objetivo,
+                'tecnologias' => $tecnologias,
+            ];
+        }
+
+        private function seccionesDesdeRepositorio(string $readme, $archivos)
+        {
+            // README sections are often framework boilerplate or sponsor lists.
+            // Functional sections are inferred from source code instead.
+            return collect();
+        }
+
+        private function analizarCodigoGithub($cliente, array $partes, string $rama, $archivos)
+        {
+            $extensiones = ['php', 'js', 'jsx', 'ts', 'tsx', 'vue', 'py', 'java', 'go', 'rb', 'cs'];
+            $fuentes = $archivos
+                ->filter(function (string $path) use ($extensiones): bool {
+                    $normalizado = strtolower(str_replace('\\', '/', $path));
+                    $extension = strtolower(pathinfo($normalizado, PATHINFO_EXTENSION));
+                    return in_array($extension, $extensiones, true)
+                        && ! preg_match('~(^|/)(vendor|node_modules|dist|build|public/build|storage)/~', $normalizado);
+                })
+                ->take(80);
+            $secciones = collect();
+
+            foreach ($fuentes as $ruta) {
+                $respuesta = $cliente->get(
+                    "https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/contents/".str_replace('%2F', '/', rawurlencode($ruta)),
+                    ['ref' => $rama]
+                );
+                if (! $respuesta->successful()) {
+                    continue;
+                }
+                $contenido = base64_decode((string) $respuesta->json('content'), true);
+                if ($contenido === false || strlen($contenido) > 180000) {
+                    continue;
+                }
+
+                $directorio = $this->seccionDesdeCodigo($ruta, $contenido);
+                $funcionalidades = $this->funcionalidadesDesdeCodigo($ruta, $contenido);
+                if ($funcionalidades === []) {
+                    continue;
+                }
+                $actual = $secciones->firstWhere('nombre', $directorio);
+                if (! $actual) {
+                    $secciones->push([
+                        'nombre' => $directorio,
+                        'descripcion' => $this->descripcionDeDominio($directorio),
+                        'funcionalidades' => [],
+                    ]);
+                    $actual = $secciones->last();
+                }
+                $indice = $secciones->search(fn (array $item): bool => $item['nombre'] === $actual['nombre']);
+                $combinadas = $this->combinarFuncionalidades($actual['funcionalidades'], $funcionalidades);
+                $secciones->put($indice, array_merge($actual, [
+                    'funcionalidades' => array_slice($combinadas, 0, 40),
+                ]));
+            }
+
+            return $secciones;
+        }
+
+        private function simbolosDeCodigo(string $contenido, string $ruta): array
+        {
+            $simbolos = [];
+            $patrones = [
+                '/\b(?:class|interface|trait)\s+([A-Za-z_][\w]*)/' => 'Módulo',
+                '/\b(?:public\s+|private\s+|protected\s+|static\s+)*function\s+([A-Za-z_][\w]*)\s*\(/' => 'Función',
+                '/\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][\w]*)\s*\(/' => 'Función',
+                '/\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/' => 'Función',
+                '/(?:app|router)\.(?:get|post|put|patch|delete)\s*\(\s*[\'"]([^\'"]+)[\'"]/' => 'Ruta',
+                '/Route::(?:get|post|put|patch|delete|resource)\s*\(\s*[\'"]([^\'"]+)[\'"]/' => 'Ruta',
+                '/<([A-Z][A-Za-z0-9]*)\b/' => 'Componente',
+            ];
+
+            foreach ($patrones as $patron => $tipo) {
+                if (preg_match_all($patron, $contenido, $coincidencias)) {
+                    foreach ($coincidencias[1] as $nombre) {
+                        $nombre = trim($nombre);
+                        if ($nombre !== '' && strlen($nombre) <= 180 && $this->esSimboloRelevante($tipo, $nombre)) {
+                            $simbolos[] = [
+                                'nombre' => $this->nombreLegibleSimbolo($tipo, $nombre),
+                                'descripcion' => $this->descripcionDeSimbolo($tipo, $nombre),
+                            ];
+                        }
+
+                    }
+                }
+            }
+
+            $unicos = [];
+            foreach ($simbolos as $simbolo) {
+                $unicos[$simbolo['nombre']] = $simbolo;
+            }
+            return array_values(array_slice($unicos, 0, 40));
+        }
+
+        private function seccionDesdeCodigo(string $ruta, string $contenido): string
+        {
+            $texto = strtolower(str_replace(['\\', '_', '-'], ' ', $ruta.' '.$contenido));
+            $reglas = [
+                'Inicio y navegación' => ['index', 'home', 'dashboard', 'inicio', 'mainlayout'],
+                'Inicio de sesión' => ['login', 'signin', 'authcontroller', 'autenticacion'],
+                'Registro de usuarios' => ['register', 'signup', 'registro'],
+                'Usuarios y perfiles' => ['user', 'usuario', 'cliente', 'profile', 'perfil'],
+                'Proyectos' => ['proyecto', 'project'],
+                'Tareas' => ['tarea', 'task'],
+                'Bugs e incidencias' => ['bug', 'incidente', 'incident', 'error'],
+                'Catálogo y productos' => ['producto', 'product', 'catalogo', 'catalog', 'inventario'],
+                'Pedidos y ventas' => ['pedido', 'order', 'venta', 'sale', 'checkout'],
+                'Asistente y automatización' => ['asistente', 'assistant', 'nexus', 'ia', 'ai'],
+                'Configuración' => ['configuracion', 'settings', 'config'],
+            ];
+            foreach ($reglas as $seccion => $palabras) {
+                foreach ($palabras as $palabra) {
+                    if (preg_match('/\b'.preg_quote($palabra, '/').'\b/i', $texto)) {
+                        return $seccion;
+                    }
+                }
+            }
+            return 'Lógica principal';
+        }
+
+        private function funcionalidadesDesdeCodigo(string $ruta, string $contenido): array
+        {
+            $texto = strtolower($ruta.' '.$contenido);
+            $funcionalidades = [];
+            $reglas = [
+                'Autenticación de usuarios' => ['login', 'signin', 'logout', 'autentic'],
+                'Registro de usuarios' => ['register', 'signup', 'registro'],
+                'Gestión de perfiles' => ['profile', 'perfil', 'usuario', 'cliente'],
+                'Gestión de proyectos' => ['proyecto', 'project'],
+                'Gestión de tareas' => ['tarea', 'task'],
+                'Gestión de bugs e incidencias' => ['bug', 'incidente', 'incident'],
+                'Gestión de productos' => ['producto', 'product', 'catalog', 'inventario'],
+                'Gestión de pedidos y ventas' => ['pedido', 'order', 'venta', 'sale', 'checkout'],
+                'Panel administrativo' => ['admin', 'administrador', 'dashboard'],
+                'Consulta de información' => ['fetch', 'axios', 'http', 'api'],
+            ];
+            foreach ($reglas as $nombre => $palabras) {
+                foreach ($palabras as $palabra) {
+                    if (preg_match('/\b'.preg_quote($palabra, '/').'\b/i', $texto)) {
+                        $funcionalidades[] = [
+                            'nombre' => $nombre,
+                            'descripcion' => $this->descripcionDeSeccion($nombre),
+                        ];
+                        break;
+                    }
+                }
+            }
+            return $funcionalidades;
+        }
+
+        private function seccionesFuncionalesDesdeRepositorio($cliente, array $partes, string $rama, $archivos)
+        {
+            $fuentes = $archivos
+                ->filter(function (string $path): bool {
+                    $path = strtolower(str_replace('\\', '/', $path));
+                    return preg_match('/\.(php|blade\.php|js|jsx|ts|tsx|vue)$/', $path) === 1
+                        && ! preg_match('~(^|/)(vendor|node_modules|dist|build|storage|public/build)/~', $path);
+                })
+                ->take(250);
+            $evidencia = [];
+            $definiciones = $this->definicionesSeccionesFuncionales();
+
+            foreach ($fuentes as $ruta) {
+                $texto = strtolower($ruta);
+
+                foreach ($definiciones as $nombre => $definicion) {
+                    foreach ($definicion['evidencias'] as $evidenciaTexto) {
+                        if (preg_match('/\b'.preg_quote($evidenciaTexto, '/').'\b/i', $texto)) {
+                            $evidencia[$nombre] = ($evidencia[$nombre] ?? 0) + 1;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return collect($definiciones)
+                ->filter(fn (array $definicion, string $nombre): bool => ($evidencia[$nombre] ?? 0) >= $definicion['minimo'])
+                ->map(fn (array $definicion, string $nombre): array => [
+                    'nombre' => $nombre,
+                    'descripcion' => $definicion['descripcion'],
+                    'funcionalidades' => [[
+                        'nombre' => $definicion['funcionalidad'],
+                        'descripcion' => $definicion['descripcion'],
+                    ]],
+                ])
+                ->values();
+        }
+
+        private function definicionesSeccionesFuncionales(): array
+        {
+            return [
+                'Inicio y navegación' => [
+                    'evidencias' => ['dashboard', 'index', 'home', 'inicio', 'mainlayout', 'navegacion'],
+                    'minimo' => 1,
+                    'funcionalidad' => 'Visualización del inicio y navegación principal',
+                    'descripcion' => 'Presenta el punto de entrada del sistema y permite desplazarse entre sus módulos principales.',
+                ],
+                'Inicio de sesión' => [
+                    'evidencias' => ['login', 'signin', 'autenticacion', 'authcontroller', 'logout'],
+                    'minimo' => 1,
+                    'funcionalidad' => 'Autenticación de usuarios',
+                    'descripcion' => 'Permite validar credenciales, iniciar sesión, cerrar sesión y proteger el acceso al sistema.',
+                ],
+                'Registro de usuarios' => [
+                    'evidencias' => ['register', 'signup', 'registro'],
+                    'minimo' => 1,
+                    'funcionalidad' => 'Creación de cuentas',
+                    'descripcion' => 'Permite registrar nuevos usuarios y completar el proceso de alta en la aplicación.',
+                ],
+                'Usuarios y perfiles' => [
+                    'evidencias' => ['usuario', 'usuarios', 'user', 'users', 'cliente', 'clientes', 'profile', 'perfil'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Administración de usuarios y perfiles',
+                    'descripcion' => 'Permite consultar, administrar y actualizar la información de usuarios o perfiles.',
+                ],
+                'Proyectos' => [
+                    'evidencias' => ['proyecto', 'proyectos', 'project', 'projects'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Gestión de proyectos',
+                    'descripcion' => 'Permite registrar proyectos, consultar su información y dar seguimiento a su avance.',
+                ],
+                'Tareas' => [
+                    'evidencias' => ['tarea', 'tareas', 'task', 'tasks'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Gestión de tareas',
+                    'descripcion' => 'Permite organizar, actualizar y completar tareas relacionadas con los proyectos.',
+                ],
+                'Bugs e incidencias' => [
+                    'evidencias' => ['bug', 'bugs', 'incidente', 'incidentes', 'incident'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Seguimiento de bugs e incidencias',
+                    'descripcion' => 'Permite registrar, consultar y dar seguimiento a problemas, bugs e incidentes.',
+                ],
+                'Actualizaciones' => [
+                    'evidencias' => ['actualizacion', 'actualizaciones', 'update', 'updates', 'changelog'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Registro de actualizaciones',
+                    'descripcion' => 'Permite documentar cambios, avances y actualizaciones realizadas en los proyectos.',
+                ],
+                'Monitoreo' => [
+                    'evidencias' => ['monitoreo', 'monitor', 'monitoring', 'health'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Monitoreo del sistema',
+                    'descripcion' => 'Permite revisar el estado de servicios, procesos o recursos supervisados.',
+                ],
+                'Asistente y automatización' => [
+                    'evidencias' => ['asistente', 'assistant', 'nexus', 'hallazgo', 'propuesta'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Asistencia y automatización',
+                    'descripcion' => 'Ofrece apoyo para analizar información, detectar hallazgos y automatizar acciones del sistema.',
+                ],
+                'Actividad' => [
+                    'evidencias' => ['actividad', 'actividades', 'activity', 'historial'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Historial de actividad',
+                    'descripcion' => 'Registra y presenta las acciones relevantes realizadas dentro de la aplicación.',
+                ],
+                'Archivos' => [
+                    'evidencias' => ['archivo', 'archivos', 'file', 'files', 'carpeta', 'folder'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Gestión de archivos',
+                    'descripcion' => 'Permite organizar, consultar o administrar archivos asociados a los proyectos.',
+                ],
+                'Configuración' => [
+                    'evidencias' => ['configuracion', 'configuraciones', 'settings', 'preferencias'],
+                    'minimo' => 2,
+                    'funcionalidad' => 'Configuración del sistema',
+                    'descripcion' => 'Permite ajustar preferencias y parámetros generales de funcionamiento.',
+                ],
+            ];
+        }
+
+        private function descripcionDeSeccion(string $nombre): string
+        {
+            return [
+                'Autenticación de usuarios' => 'Permite iniciar y cerrar sesión, validar credenciales y proteger el acceso a la aplicación.',
+                'Registro de usuarios' => 'Permite crear nuevas cuentas y completar el proceso de alta de usuarios.',
+                'Gestión de perfiles' => 'Permite consultar y administrar la información asociada a usuarios o clientes.',
+                'Gestión de proyectos' => 'Permite registrar proyectos, consultar su información y dar seguimiento a su avance.',
+                'Gestión de tareas' => 'Permite organizar, actualizar y completar tareas relacionadas con los proyectos.',
+                'Gestión de bugs e incidencias' => 'Permite registrar, consultar y dar seguimiento a problemas e incidencias.',
+                'Gestión de productos' => 'Permite administrar y consultar los productos que maneja la aplicación.',
+                'Gestión de pedidos y ventas' => 'Permite administrar operaciones comerciales, pedidos o ventas.',
+                'Panel administrativo' => 'Concentra las herramientas de administración y supervisión del sistema.',
+                'Consulta de información' => 'Obtiene y presenta información mediante servicios internos o una API.',
+            ][$nombre] ?? 'Agrupa el flujo funcional relacionado con esta parte de la aplicación.';
+        }
+
+        private function combinarSeccionesRepositorio($documentacion, $codigo)
+        {
+            $resultado = collect($documentacion);
+            foreach ($codigo as $seccionCodigo) {
+                $indice = $resultado->search(fn (array $item): bool => strtolower($item['nombre']) === strtolower($seccionCodigo['nombre']));
+                if ($indice === false) {
+                    $resultado->push($seccionCodigo);
+                    continue;
+                }
+                $actual = $resultado->get($indice);
+                $resultado->put($indice, array_merge($actual, [
+                    'funcionalidades' => $this->combinarFuncionalidades(
+                        $actual['funcionalidades'],
+                        $seccionCodigo['funcionalidades']
+                    ),
+                ]));
+            }
+            return $resultado->take(30)->values();
+        }
+
+        private function tecnologiasDesdeCodigo($archivos): string
+        {
+            $nombres = [
+                'php' => 'PHP',
+                'js' => 'JavaScript',
+                'jsx' => 'React',
+                'ts' => 'TypeScript',
+                'tsx' => 'TypeScript',
+                'vue' => 'Vue.js',
+                'scss' => 'SCSS',
+                'css' => 'CSS',
+                'html' => 'HTML',
+                'json' => 'JSON',
+                'py' => 'Python',
+                'java' => 'Java',
+                'go' => 'Go',
+            ];
+            return $archivos
+                ->map(fn (string $path): string => strtolower(pathinfo($path, PATHINFO_EXTENSION)))
+                ->filter()
+                ->map(fn (string $extension): string => $nombres[$extension] ?? '')
+                ->filter()
+                ->unique()
+                ->implode(', ');
+        }
+
+        private function contextoDesdeCodigo($secciones, $archivos, string $readme, string $nombreRepositorio): string
+        {
+            $seccionesDetectadas = $secciones->pluck('nombre')->unique()->values();
+            if ($seccionesDetectadas->isEmpty()) {
+                return 'Aplicación de software desarrollada a partir del código existente del repositorio, con módulos funcionales organizados para atender las necesidades descritas en su documentación.';
+            }
+            $temas = $seccionesDetectadas->take(6)->implode(', ');
+            return "Aplicación organizada en las áreas de {$temas}. El código analizado contiene las pantallas, reglas y servicios que sostienen esos flujos.";
+        }
+
+        private function objetivoDesdeCodigo($secciones, string $contexto): string
+        {
+            return "Consolidar los flujos funcionales identificados en el proyecto y mantener alineadas sus pantallas, reglas de negocio y servicios. El objetivo es mejorar el sistema existente sin agregar capacidades que no estén respaldadas por el código.";
+        }
+
+        private function descripcionDesdeContexto(string $contexto): string
+        {
+            return "Aplicación web que {$contexto} Su estructura combina una interfaz para usuarios, lógica de negocio y servicios de soporte detectados en el repositorio.";
+        }
+
+        private function limpiarMarkdown(string $texto): string
+        {
+            $texto = preg_replace('/\[([^\]]+)\]\([^)]+\)/', '$1', $texto) ?? $texto;
+            $texto = preg_replace('/[`*_>#]/', '', $texto) ?? $texto;
+            return trim(preg_replace('/\s+/', ' ', $texto));
+        }
+
+        private function dominioDesdeRuta(string $ruta): string
+        {
+            $texto = strtolower(str_replace('\\', '/', $ruta));
+            $dominios = [
+                'administración' => ['admin', 'administrador', 'dashboard'],
+                'autenticación y usuarios' => ['auth', 'login', 'register', 'usuario', 'cliente'],
+                'catálogo y productos' => ['product', 'producto', 'catalog', 'tienda', 'store'],
+                'carrito y pedidos' => ['cart', 'carrito', 'order', 'pedido', 'sale', 'venta', 'checkout'],
+                'API y servicios' => ['api', 'service', 'conexion', 'controller'],
+                'interfaz de usuario' => ['component', 'layout', 'page', 'pages', 'view', 'assets'],
+                'configuración' => ['config', 'router', 'route', 'store'],
+            ];
+            foreach ($dominios as $nombre => $palabras) {
+                foreach ($palabras as $palabra) {
+                    if (str_contains($texto, $palabra)) {
+                        return $nombre;
+                    }
+                }
+            }
+            return 'Lógica principal de la aplicación';
+        }
+
+        private function descripcionDeDominio(string $dominio): string
+        {
+            return [
+                'administración' => 'Funciones para gestionar productos, clientes, promociones, pedidos y operaciones internas.',
+                'autenticación y usuarios' => 'Flujos de acceso, registro, recuperación de cuenta y gestión de usuarios.',
+                'catálogo y productos' => 'Consulta, organización, detalle y administración de los productos ofrecidos.',
+                'carrito y pedidos' => 'Selección de productos, cantidades, compras y seguimiento del estado de los pedidos.',
+                'API y servicios' => 'Comunicación con el backend y servicios que proporcionan o procesan la información.',
+                'interfaz de usuario' => 'Pantallas y componentes visuales que permiten al usuario interactuar con la aplicación.',
+                'configuración' => 'Configuración de rutas, estado global, herramientas y comportamiento de la aplicación.',
+                'Lógica principal de la aplicación' => 'Reglas y código principal que soportan el funcionamiento del proyecto.',
+            ][$dominio] ?? 'Módulo funcional detectado en el código fuente.';
+        }
+
+        private function nombreLegibleSimbolo(string $tipo, string $nombre): string
+        {
+            return match ($tipo) {
+                'Ruta' => 'Endpoint '.$nombre,
+                'Componente' => 'Interfaz '.$nombre,
+                'Módulo' => 'Módulo '.$nombre,
+                default => 'Capacidad '.preg_replace('/([a-z])([A-Z])/', '$1 $2', $nombre),
+            };
+        }
+
+        private function descripcionDeSimbolo(string $tipo, string $nombre): string
+        {
+            $legible = strtolower(preg_replace('/([a-z])([A-Z])/', '$1 $2', $nombre));
+            if (preg_match('/login|register|auth|usuario|cliente/', $legible)) {
+                return 'Gestiona el acceso, registro o información de las cuentas de usuario.';
+            }
+            if (preg_match('/product|producto|catalog|inventario/', $legible)) {
+                return 'Gestiona la consulta, edición o presentación de productos del sistema.';
+            }
+            if (preg_match('/pedido|order|cart|carrito|venta|sale/', $legible)) {
+                return 'Gestiona el flujo de pedidos, ventas o selección de elementos para una operación.';
+            }
+            if (preg_match('/tarea|proyecto|bug|incidente|actividad/', $legible)) {
+                return 'Gestiona información operativa del seguimiento y control del proyecto.';
+            }
+            return match ($tipo) {
+                'Ruta' => "Expone el flujo {$legible} para que la aplicación pueda recibir o procesar solicitudes.",
+                'Componente' => "Presenta la interfaz {$legible} y concentra la interacción visual de ese flujo.",
+                'Módulo' => "Agrupa reglas y comportamiento relacionado con {$legible}.",
+                default => "Ejecuta el flujo de {$legible} dentro de la aplicación.",
+            };
+        }
+
+        private function descripcionDeFuncionalidad(string $nombre): string
+        {
+            $legible = strtolower(trim($nombre));
+            return "Permite {$legible} como parte del flujo funcional documentado del proyecto.";
+        }
+
+        private function combinarFuncionalidades(array $actuales, array $nuevas): array
+        {
+            $resultado = [];
+            foreach (array_merge($actuales, $nuevas) as $funcionalidad) {
+                $item = is_array($funcionalidad)
+                    ? $funcionalidad
+                    : ['nombre' => (string) $funcionalidad, 'descripcion' => $this->descripcionDeFuncionalidad((string) $funcionalidad)];
+                $resultado[$item['nombre']] = $item;
+            }
+            return array_values(array_slice($resultado, 0, 40));
+        }
+
+        private function esSimboloRelevante(string $tipo, string $nombre): bool
+        {
+            $normalizado = strtolower($nombre);
+            $tecnicos = [
+                'below', 'type', 'go', 'run', 'init', 'setup', 'reset', 'format', 'escapehtml',
+                'handleerror', 'constructor', 'render', 'mount', 'unmount', 'quasarfeatureflags',
+            ];
+            if (in_array($normalizado, $tecnicos, true)) {
+                return false;
+            }
+            if ($tipo === 'Función' && strlen($normalizado) < 4) {
+                return false;
+            }
+            return true;
+        }
 
     public function analizarGithub(Proyecto $proyecto)
     {
@@ -1250,9 +1884,7 @@ class ProyectoController extends Controller
             return [
                 'nombre' => 'Jesús Guerra',
                 'rol' => 'Desarrollador',
-                'foto' => asset(
-                    'storage/images/jesus-guerra.jpg'
-                ),
+                'foto' => asset('favicon.ico'),
             ];
         }
 
@@ -1272,9 +1904,7 @@ class ProyectoController extends Controller
 
             'foto' => $user->foto
                 ? asset('storage/'.$user->foto)
-                : asset(
-                    'storage/images/jesus-guerra.jpg'
-                ),
+                : asset('favicon.ico'),
         ];
     }
 }

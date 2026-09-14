@@ -65,7 +65,7 @@
         ?? 'Desarrollador';
 
     $fotoUsuario = $usuarioActual->foto
-        ?? asset('storage/images/jesus-guerra.jpg');
+        ?? asset('favicon.ico');
 
 @endphp
 

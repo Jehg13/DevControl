@@ -43,7 +43,7 @@
             </div>
 
             <div class="mb-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3">
-                <img src="{{ $usuario['foto'] ?? asset('storage/images/jesus-guerra.jpg') }}"
+                <img src="{{ $usuario['foto'] ?? asset('favicon.ico') }}"
                      alt="Foto de {{ $usuario['nombre'] ?? 'Jesús Guerra' }}"
                      class="h-10 w-10 shrink-0 rounded-full border border-white/10 object-cover">
                 <div class="min-w-0">

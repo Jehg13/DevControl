@@ -176,7 +176,7 @@
                        px-3 py-3">
 
                 <img
-                    src="{{ $usuarioActual['foto'] ?? asset('storage/images/jesus-guerra.jpg') }}"
+                    src="{{ $usuarioActual['foto'] ?? asset('favicon.ico') }}"
                     alt="Foto de {{ $usuarioActual['nombre'] ?? 'Jesús Guerra' }}"
                     class="h-10 w-10 shrink-0 rounded-full
                            border border-white/10 object-cover">

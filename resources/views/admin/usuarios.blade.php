@@ -19,7 +19,7 @@
                 <span class="font-display text-lg font-bold tracking-tight">DEV<span class="text-[#d61f2c]">CONTROL</span></span>
             </div>
             <div class="mb-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3">
-                <img src="{{ asset('storage/images/jesus-guerra.jpg') }}" alt="Perfil" class="h-10 w-10 shrink-0 rounded-full border border-white/10 object-cover">
+                <img src="{{ asset('favicon.ico') }}" alt="Perfil" class="h-10 w-10 shrink-0 rounded-full border border-white/10 object-cover">
                 <div class="min-w-0">
                     <p class="truncate text-sm font-bold text-white">{{ auth()->user()->name }}</p>
                     <p class="truncate font-mono2 text-[11px] text-gray-500">{{ auth()->user()->rol }}</p>

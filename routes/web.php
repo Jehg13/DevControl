@@ -66,12 +66,14 @@ Route::delete('/dashboard/asistente/historial', [AsistenteController::class, 'cl
 Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 Route::get('/dashboard/proyectos', [ProyectoController::class, 'index'])->name('proyectos.index');
 Route::post('/dashboard/proyectos', [ProyectoController::class, 'store'])->name('proyectos.store');
+Route::post('/dashboard/proyectos/importar', [ProyectoController::class, 'importarProyecto'])->name('proyectos.import');
 Route::put('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'update'])->name('proyectos.update');
 Route::delete('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'destroy'])->name('proyectos.destroy');
 Route::get('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'show'])->name('proyectos.show');
 Route::post('/dashboard/proyectos/{proyecto}/github/sincronizar', [ProyectoController::class, 'sincronizarGithub'])->name('proyectos.github.sync');
 Route::post('/dashboard/proyectos/{proyecto}/github/manual', [ProyectoController::class, 'configurarGithubManual'])->name('proyectos.github.manual');
 Route::post('/dashboard/proyectos/{proyecto}/github/analizar', [ProyectoController::class, 'analizarGithub'])->name('proyectos.github.analyze');
+Route::post('/dashboard/proyectos/{proyecto}/github/importar', [ProyectoController::class, 'importarGithub'])->name('proyectos.github.import');
 Route::post('/dashboard/proyectos/{proyecto}/github/commit', [ProyectoController::class, 'crearCommitGithub'])->name('proyectos.github.commit');
 Route::resource('/dashboard/tareas', TareasController::class);
 Route::get('/dashboard/actualizaciones', [ActualizacionController::class, 'index'])->name('actualizaciones');
