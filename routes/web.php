@@ -58,6 +58,7 @@ Route::post('/dashboard/asistente/razonar', [NexusController::class, 'reason'])-
 Route::post('/dashboard/asistente/ejecutar', [NexusController::class, 'execute'])->name('nexus.execute');
 Route::get('/dashboard/asistente/ejecuciones/{run}', [NexusController::class, 'run'])->name('nexus.run');
 Route::get('/dashboard/asistente/memoria', [NexusController::class, 'memories'])->name('nexus.memories');
+Route::get('/dashboard/asistente/analisis', [NexusController::class, 'analyses'])->name('nexus.analyses');
 Route::delete('/dashboard/asistente/memoria/{memory}', [NexusController::class, 'forgetMemory'])->name('nexus.memory.forget');
 Route::get('/dashboard/asistente/hallazgos', [NexusController::class, 'findings'])->name('nexus.findings');
 Route::get('/dashboard/asistente/salud', [NexusController::class, 'health'])->name('nexus.health');

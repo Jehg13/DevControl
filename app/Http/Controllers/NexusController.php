@@ -82,6 +82,24 @@ class NexusController extends Controller
         ]);
     }
 
+    public function analyses(Request $request)
+    {
+        $data = $request->validate([
+            'proyecto_id' => ['nullable', 'integer', 'min:1'],
+            'tipo' => ['nullable', 'string', 'max:50'],
+        ]);
+
+        return response()->json([
+            'analisis' => \App\Models\NexusAnalysisResult::query()
+                ->where('usuario_id', $request->user()?->id)
+                ->when($data['proyecto_id'] ?? null, fn ($query, $id) => $query->where('proyecto_id', $id))
+                ->when($data['tipo'] ?? null, fn ($query, $type) => $query->where('analysis_type', $type))
+                ->latest()
+                ->limit(100)
+                ->get(),
+        ]);
+    }
+
     public function forgetMemory(Request $request, \App\Models\NexusMemory $memory, NexusMemoryService $service)
     {
         $service->forget($memory, $request->user()?->id);

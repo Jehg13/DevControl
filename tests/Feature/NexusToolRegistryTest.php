@@ -87,6 +87,16 @@ class NexusToolRegistryTest extends TestCase
         $this->assertFalse($definition['requires_confirmation']);
     }
 
+    public function test_analysis_save_tool_requires_write_permission_and_confirmation(): void
+    {
+        $definition = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.analysis.save');
+
+        $this->assertNotNull($definition);
+        $this->assertSame(['nexus.write'], $definition['permissions']);
+        $this->assertTrue($definition['requires_confirmation']);
+    }
+
     private function tool(): AbstractNexusTool
     {
         return new class extends AbstractNexusTool
