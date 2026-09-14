@@ -18,12 +18,14 @@ class NexusRun extends Model
         'status',
         'steps',
         'context',
+        'internal_state',
         'result',
         'error',
     ];
 
     protected $casts = [
         'context' => 'array',
+        'internal_state' => 'array',
         'result' => 'array',
     ];
 
