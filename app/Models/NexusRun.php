@@ -20,6 +20,7 @@ class NexusRun extends Model
         'context',
         'internal_state',
         'result',
+        'reflection',
         'error',
     ];
 
@@ -27,6 +28,7 @@ class NexusRun extends Model
         'context' => 'array',
         'internal_state' => 'array',
         'result' => 'array',
+        'reflection' => 'array',
     ];
 
     public function usuario(): BelongsTo

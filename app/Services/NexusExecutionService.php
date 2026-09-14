@@ -17,6 +17,7 @@ class NexusExecutionService
         private readonly NexusMemoryService $memory,
         private readonly NexusStateService $state,
         private readonly NexusPlanService $plans,
+        private readonly NexusReflectionService $reflection,
     ) {
     }
 
@@ -76,7 +77,8 @@ class NexusExecutionService
                         $run,
                         $reasoning->errorCode ?? 'reasoning_failed',
                         $reasoning->error ?? 'Razonamiento fallido.',
-                        $internalState
+                        $internalState,
+                        $conversation
                     );
                 }
 
@@ -100,7 +102,7 @@ class NexusExecutionService
                         $plan = $this->plans->complete($plan);
                         $internalState['plan'] = $plan->toArray();
                     }
-                    return $this->complete($run, $lastResponse->toArray(), 'completed', $internalState);
+                    return $this->complete($run, $lastResponse->toArray(), 'completed', $internalState, $conversation);
                 }
 
                 $requiresConfirmation = collect($lastResponse->toolCalls)
@@ -115,7 +117,8 @@ class NexusExecutionService
                         $run,
                         'plan_required',
                         'Nexus debe crear un plan y definir los archivos objetivo antes de ejecutar cambios.',
-                        $internalState
+                        $internalState,
+                        $conversation
                     );
                 }
 
@@ -128,7 +131,7 @@ class NexusExecutionService
                     return $this->complete($run, [
                         'status' => 'confirmation_required',
                         'reasoning' => $lastResponse->toArray(),
-                    ], 'awaiting_confirmation', $internalState);
+                    ], 'awaiting_confirmation', $internalState, $conversation);
                 }
 
                 foreach ($lastResponse->toolCalls as $call) {
@@ -142,7 +145,8 @@ class NexusExecutionService
                             $run,
                             'duplicate_tool_call',
                             'El modelo solicitó repetidamente la misma herramienta y Nexus detuvo la ejecución.',
-                            $internalState
+                            $internalState,
+                            $conversation
                         );
                     }
 
@@ -196,16 +200,16 @@ class NexusExecutionService
                             'status' => 'confirmation_required',
                             'reasoning' => $lastResponse->toArray(),
                             'tool_results' => $toolResults,
-                        ], 'awaiting_confirmation', $internalState);
+                        ], 'awaiting_confirmation', $internalState, $conversation);
                     }
                 }
             }
 
-            return $this->fail($run, 'max_steps_exceeded', 'Nexus alcanzó el límite de pasos sin obtener una respuesta final.', $internalState);
+            return $this->fail($run, 'max_steps_exceeded', 'Nexus alcanzó el límite de pasos sin obtener una respuesta final.', $internalState, $conversation);
         } catch (Throwable $exception) {
             Log::error('Nexus execution failed.', ['run_id' => $run->id, 'exception' => $exception]);
 
-            return $this->fail($run, 'execution_failed', 'Nexus no pudo completar la ejecución.', $internalState ?? []);
+            return $this->fail($run, 'execution_failed', 'Nexus no pudo completar la ejecución.', $internalState ?? [], $conversation);
         }
     }
 
@@ -261,12 +265,16 @@ class NexusExecutionService
         ];
     }
 
-    private function complete(NexusRun $run, array $result, string $status = 'completed', ?array $state = null): NexusRun
+    private function complete(NexusRun $run, array $result, string $status = 'completed', ?array $state = null, ?\App\Models\NexusConversation $conversation = null): NexusRun
     {
+        $run->update(['status' => $status, 'result' => $result]);
+        if ($conversation && $state !== null) {
+            $reflection = $this->reflection->reflect($run->fresh(), $state, $result, $conversation);
+            $state['reflection'] = $reflection;
+        }
         if ($state !== null) {
             $this->state->persist($run, $state);
         }
-        $run->update(['status' => $status, 'result' => $result]);
 
         return $run->fresh('toolCalls');
     }
@@ -282,12 +290,19 @@ class NexusExecutionService
         ]);
     }
 
-    private function fail(NexusRun $run, string $code, string $message, array $state = []): NexusRun
+    private function fail(NexusRun $run, string $code, string $message, array $state = [], ?\App\Models\NexusConversation $conversation = null): NexusRun
     {
+        $run->update(['status' => 'failed', 'error' => "{$code}: {$message}"]);
+        if ($conversation && $state !== []) {
+            $reflection = $this->reflection->reflect($run->fresh(), $state, [
+                'status' => 'failed',
+                'error' => ['code' => $code, 'message' => $message],
+            ], $conversation);
+            $state['reflection'] = $reflection;
+        }
         if ($state !== []) {
             $this->state->persist($run, $this->state->markFailure($state, $message));
         }
-        $run->update(['status' => 'failed', 'error' => "{$code}: {$message}"]);
 
         return $run->fresh('toolCalls');
     }
