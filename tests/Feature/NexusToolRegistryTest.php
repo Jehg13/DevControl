@@ -66,6 +66,17 @@ class NexusToolRegistryTest extends TestCase
         $this->assertSame(['ok' => true, 'data' => ['value' => 'hello'], 'error' => null, 'meta' => []], $result->toArray());
     }
 
+    public function test_code_analysis_tool_is_registered_as_read_only(): void
+    {
+        $definition = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.code.analyze');
+
+        $this->assertNotNull($definition);
+        $this->assertSame(['nexus.read'], $definition['permissions']);
+        $this->assertFalse($definition['requires_confirmation']);
+        $this->assertStringContainsString('tecnologías', $definition['description']);
+    }
+
     private function tool(): AbstractNexusTool
     {
         return new class extends AbstractNexusTool

@@ -29,6 +29,7 @@ class NexusStateService
                 'execute registered tools',
                 'chain bounded tool calls',
                 'retrieve relevant conversation memory',
+                'analyze project technologies and code structure before changes',
             ],
             'limitations' => [
                 'bounded execution steps',
