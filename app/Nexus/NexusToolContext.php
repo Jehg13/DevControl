@@ -11,6 +11,10 @@ final class NexusToolContext
         public readonly string $source = 'application',
         public readonly bool $confirmed = false,
         public readonly bool $system = false,
+        public readonly array $grantedPermissions = [],
+        public readonly ?int $runId = null,
+        public readonly ?int $projectId = null,
+        public readonly ?string $toolName = null,
     ) {
     }
 }

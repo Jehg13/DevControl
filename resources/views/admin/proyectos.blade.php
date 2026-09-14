@@ -14,7 +14,7 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 
     <title>
-        DevControl | {{ ($proyecto ?? null)?->nombre ?? 'Proyectos' }}
+        DevControl | {{ data_get($proyecto ?? null, 'nombre', 'Proyectos') }}
     </title>
 
     <style>
@@ -59,16 +59,16 @@
 
     $notasLista = $notas ?? collect();
 
-    $seccionesLista = $proyectoActual?->secciones ?? collect();
+    $seccionesLista = data_get($proyectoActual, 'secciones', collect());
 
     $estadoProyecto =
-        $proyectoActual?->estado ?? 'Activo';
+        data_get($proyectoActual, 'estado', 'Activo');
 
     $progresoProyecto = min(
         100,
         max(
             0,
-            (int) ($proyectoActual?->progreso ?? 0)
+            (int) data_get($proyectoActual, 'progreso', 0)
         )
     );
 
@@ -419,7 +419,7 @@
 
                 <span class="font-semibold text-gray-300">
 
-                    {{ \Illuminate\Support\Str::slug($proyectoActual?->nombre ?? 'proyectos') }}
+                    {{ \Illuminate\Support\Str::slug(data_get($proyectoActual, 'nombre', 'proyectos')) }}
 
                 </span>
 
@@ -533,7 +533,7 @@
 
                     <a href="{{ route('proyectos.show', $item->id) }}"
                        class="group rounded-2xl border p-5 transition
-                       {{ $proyectoActual && $proyectoActual->id == $item->id
+                       {{ data_get($proyectoActual, 'id') == $item->id
                             ? 'border-[#d61f2c]/50 bg-[#d61f2c]/10'
                             : 'border-white/10 bg-[#0f0f11] hover:border-white/20'
                        }}">
@@ -738,7 +738,7 @@
         {{-- PROYECTO SELECCIONADO --}}
         {{-- ============================================================ --}}
 
-        @if($proyectoActual)
+        @if($proyectoActual instanceof \App\Models\Proyecto)
 
             <div class="mt-6 rounded-2xl border border-white/10
                         bg-[#0f0f11] p-5 sm:p-6">

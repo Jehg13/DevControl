@@ -10,8 +10,22 @@ use App\Nexus\Tools\AuditHealthTool;
 use App\Nexus\Tools\AuditProposalsTool;
 use App\Nexus\Tools\AuditScanTool;
 use App\Nexus\Tools\CodeAnalyzeTool;
+use App\Nexus\Tools\CodeIntelligenceTool;
+use App\Nexus\Tools\DatasetGenerateTool;
+use App\Nexus\Tools\LearningAnalyzeTool;
 use App\Nexus\Tools\CodeValidateTool;
 use App\Nexus\Tools\AnalysisSaveTool;
+use App\Nexus\Tools\ProjectUnderstandTool;
+use App\Nexus\Tools\ProjectQueryTool;
+use App\Nexus\Tools\PlanCreateTool;
+use App\Nexus\Tools\GithubInspectTool;
+use App\Nexus\Tools\GithubFileWriteTool;
+use App\Nexus\Tools\GithubMutationTool;
+use App\Nexus\Tools\InfrastructureInspectTool;
+use App\Nexus\Tools\ExperienceSearchTool;
+use App\Nexus\Tools\KnowledgeQueryTool;
+use App\Nexus\Tools\PerformanceReportTool;
+use App\Nexus\Tools\OptimizationProposalsTool;
 use App\Nexus\Tools\IncidentCreateTool;
 use App\Nexus\Tools\BugCreateTool;
 use App\Nexus\Tools\BugDeleteTool;
@@ -23,6 +37,8 @@ use App\Nexus\Tools\TaskDeleteTool;
 use App\Nexus\Tools\TaskListTool;
 use App\Nexus\Tools\TaskUpdateTool;
 use App\Services\Models\OpenAICompatibleNexusModel;
+use App\Services\Models\UnavailableNexusModel;
+use App\Services\NexusInferenceEngine;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -32,21 +48,38 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->bind(NexusModel::class, function ($app): NexusModel {
-            return match (config('nexus.ai.driver')) {
+        $this->app->singleton(NexusModel::class, function ($app): NexusModel {
+            $adapter = match (config('nexus.ai.driver')) {
+                'none' => $app->make(UnavailableNexusModel::class),
                 'openai_compatible' => $app->make(OpenAICompatibleNexusModel::class),
                 default => throw new \RuntimeException(
                     'El proveedor de Nexus configurado no está soportado: '.config('nexus.ai.driver')
                 ),
             };
+
+            return new NexusInferenceEngine($adapter);
         });
 
         $this->app->singleton(NexusToolRegistry::class, function ($app): NexusToolRegistry {
             return new NexusToolRegistry([
                 $app->make(AuditScanTool::class),
                 $app->make(CodeAnalyzeTool::class),
+                $app->make(CodeIntelligenceTool::class),
+                $app->make(DatasetGenerateTool::class),
+                $app->make(LearningAnalyzeTool::class),
                 $app->make(CodeValidateTool::class),
                 $app->make(AnalysisSaveTool::class),
+                $app->make(ProjectUnderstandTool::class),
+                $app->make(ProjectQueryTool::class),
+                $app->make(PlanCreateTool::class),
+                $app->make(GithubInspectTool::class),
+                $app->make(GithubFileWriteTool::class),
+                $app->make(GithubMutationTool::class),
+                $app->make(InfrastructureInspectTool::class),
+                $app->make(ExperienceSearchTool::class),
+                $app->make(KnowledgeQueryTool::class),
+                $app->make(PerformanceReportTool::class),
+                $app->make(OptimizationProposalsTool::class),
                 $app->make(AuditFindingsTool::class),
                 $app->make(AuditHealthTool::class),
                 $app->make(AuditProposalsTool::class),

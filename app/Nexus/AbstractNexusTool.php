@@ -3,9 +3,9 @@
 namespace App\Nexus;
 
 use App\Contracts\NexusTool;
-use App\Exceptions\NexusToolPermissionException;
 use App\Exceptions\NexusToolValidationException;
 use Illuminate\Support\Facades\Validator;
+use App\Services\NexusPermissionManager;
 
 abstract class AbstractNexusTool implements NexusTool
 {
@@ -21,17 +21,47 @@ abstract class AbstractNexusTool implements NexusTool
 
     final public function execute(array $parameters, NexusToolContext $context): NexusToolResult
     {
-        $this->authorize($context);
+        $auditId = app(NexusPermissionManager::class)->authorize(
+            $this->name(),
+            $this->permissions(),
+            $parameters,
+            new NexusToolContext(
+                $context->user,
+                $context->source,
+                $context->confirmed,
+                $context->system,
+                $context->grantedPermissions,
+                $context->runId,
+                $context->projectId,
+                $this->name()
+            ),
+            $this->requiresConfirmation()
+        );
 
         $validator = Validator::make($parameters, $this->validationRules());
         if ($validator->fails()) {
+            app(NexusPermissionManager::class)->complete($auditId, false, ['error' => 'validation_failed']);
             throw new NexusToolValidationException(
                 'Los parámetros de la herramienta no son válidos.',
                 $validator->errors()->toArray()
             );
         }
 
-        if ($this->requiresConfirmation() && ! $context->confirmed) {
+        if (app(NexusPermissionManager::class)->requiresApproval(
+            $this->name(),
+            $this->permissions(),
+            new NexusToolContext(
+                $context->user,
+                $context->source,
+                $context->confirmed,
+                $context->system,
+                $context->grantedPermissions,
+                $context->runId,
+                $context->projectId,
+                $this->name()
+            ),
+            $this->requiresConfirmation()
+        ) && ! $context->confirmed) {
             return NexusToolResult::failure(
                 'confirmation_required',
                 'Esta herramienta requiere confirmación explícita antes de ejecutar cambios.',
@@ -39,7 +69,10 @@ abstract class AbstractNexusTool implements NexusTool
             );
         }
 
-        return $this->handle($validator->validated(), $context);
+        $result = $this->handle($validator->validated(), $context);
+        app(NexusPermissionManager::class)->complete($auditId, $result->successful, $result->toArray());
+
+        return $result;
     }
 
     protected function validationRules(): array
@@ -49,18 +82,4 @@ abstract class AbstractNexusTool implements NexusTool
 
     abstract protected function handle(array $parameters, NexusToolContext $context): NexusToolResult;
 
-    private function authorize(NexusToolContext $context): void
-    {
-        if ($this->permissions() === []) {
-            return;
-        }
-
-        if ($context->system) {
-            return;
-        }
-
-        if (! $context->user || $context->user->rol !== 'admin') {
-            throw new NexusToolPermissionException();
-        }
-    }
 }

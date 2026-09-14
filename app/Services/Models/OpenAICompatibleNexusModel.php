@@ -6,11 +6,21 @@ use App\Contracts\NexusModel;
 use App\Exceptions\NexusModelException;
 use App\Nexus\NexusModelRequest;
 use App\Nexus\NexusModelResponse;
+use App\Nexus\NexusModelCapabilities;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
 class OpenAICompatibleNexusModel implements NexusModel
 {
+    public function capabilities(): NexusModelCapabilities
+    {
+        return new NexusModelCapabilities(
+            textGeneration: true,
+            structuredOutput: true,
+            toolCalling: true,
+        );
+    }
+
     public function complete(NexusModelRequest $request): NexusModelResponse
     {
         $config = config('nexus.ai');
@@ -91,13 +101,13 @@ class OpenAICompatibleNexusModel implements NexusModel
             '  "message": "respuesta breve para el usuario",'."\n".
             '  "tool_calls": [{"name": "nombre.exacto", "arguments": {}}],'."\n".
             '  "requires_confirmation": false,'."\n".
-            '  "metadata": {"confidence": 0, "objective": "", "priority": 50, "subtasks": [{"id": "subtask-1", "title": "", "dependencies": [], "priority": 50, "status": "pending", "expected_result": "", "completion_criteria": ""}], "expected_result": "", "completion_criteria": "", "target_files": []}'."\n".
+            '  "metadata": {"confidence": 0, "objective": "", "priority": 50, "subtasks": [{"id": "subtask-1", "title": "", "description": "", "goal": "", "dependencies": [], "required_tools": [], "priority": 50, "status": "pending", "result": null, "error": null, "attempts": 0, "started_at": null, "completed_at": null, "expected_result": "", "completion_criteria": ""}], "expected_result": "", "completion_criteria": "", "target_files": []}'."\n".
             "}\n\n".
             "No inventes herramientas ni argumentos. Si no corresponde una herramienta, devuelve tool_calls como []. ".
             "Las herramientas solo se describen; otra capa decidirá si se ejecutan.\n\n".
             "Contexto disponible:\n".json_encode($request->context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)."\n\n".
             "Herramientas disponibles:\n".json_encode($request->tools, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)."\n\n".
-            "Historial y memoria relevante recuperados (el historial completo no se incluye):\n".json_encode($request->context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)."\n\n".
+            "Historial y memoria relevante recuperados (el historial completo no se incluye):\n".json_encode($request->history, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)."\n\n".
             "Resultados de herramientas de los pasos anteriores:\n".json_encode($request->toolResults, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 

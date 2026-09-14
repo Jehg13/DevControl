@@ -26,13 +26,15 @@ class NexusReasoningService
         array $context = [],
         array $history = [],
         array $toolResults = [],
+        ?array $availableTools = null,
     ): NexusReasoningResult {
         try {
+            $tools = $availableTools ?? $this->tools->definitions();
             $response = $this->model->complete(new NexusModelRequest(
                 identity: NexusIdentity::prompt(),
                 message: $message,
                 context: $context,
-                tools: $this->tools->definitions(),
+                tools: $tools,
                 history: $history,
                 toolResults: $toolResults,
             ));

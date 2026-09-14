@@ -18,6 +18,7 @@ class NexusStateService
             'current_goal' => $message,
             'current_task' => null,
             'plan' => [],
+            'current_plan_step' => null,
             'target_files' => [],
             'phase' => 'understanding',
             'current_context' => $context,
@@ -33,6 +34,7 @@ class NexusStateService
                 'chain bounded tool calls',
                 'retrieve relevant conversation memory',
                 'analyze project technologies and code structure before changes',
+                'create bounded plans with dependencies and evaluate each step',
             ],
             'limitations' => [
                 'bounded execution steps',
@@ -110,11 +112,16 @@ class NexusStateService
             ];
         }
 
+        $plan = $state['plan'] ?? [];
+        $nextStep = collect($plan['subtasks'] ?? [])->first(fn (array $task) => $task['status'] === 'in_progress')
+            ?? collect($plan['subtasks'] ?? [])->first(fn (array $task) => $task['status'] === 'pending');
+
         return array_merge($state, [
             'phase' => $nextAction === 'validate_changes' ? 'validation' : 'execution',
             'current_task' => $toolName,
             'last_action' => 'tool:'.$toolName,
             'last_action_result' => $result,
+            'current_plan_step' => $nextStep,
             'known_information' => array_slice($known, -20),
             'unknown_information' => $result['successful'] ?? false
                 ? ($state['unknown_information'] ?? [])

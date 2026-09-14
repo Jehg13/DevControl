@@ -188,7 +188,7 @@ class AsistenteController extends Controller
         ]);
     }
 
-    public function clear(Request $request, \App\Services\NexusMemoryService $memory)
+    public function clear(Request $request, NexusMemoryService $memory)
     {
         $request->session()->forget('assistant_messages');
         $conversation = $memory->conversation($request->session()->getId(), $request->user()?->id);
@@ -563,7 +563,7 @@ class AsistenteController extends Controller
                 if ($findings->isEmpty()) {
                     $content = 'No hay hallazgos activos persistidos. Ejecuta `php artisan nexus:scan` para actualizar la auditoría local.';
                 } else {
-                    $grouped = $findings->groupBy(fn ($finding) => $finding->proyecto?->nombre ?? 'Sistema');
+                    $grouped = $findings->groupBy(fn ($finding) => data_get($finding, 'proyecto.nombre', 'Sistema'));
                     $content = "Hallazgos activos: {$findings->count()}\n\n".$grouped->map(
                         fn ($items, $project) => "{$project}: {$items->count()} (". $items->pluck('severidad')->countBy()->map(fn ($n, $s) => "{$s}: {$n}")->implode(', ').')'
                     )->implode("\n");
@@ -877,7 +877,7 @@ class AsistenteController extends Controller
             ];
         }
 
-        if (preg_match("/'password'\\s*=>\\s*\\$datosValidados\\['password'\\]/", $files['app/Http/Controllers/RegisterController.php'] ?? '') === 1) {
+        if (preg_match("/'password'\\s*=>\\s*\\\$datosValidados\\['password'\\]/", $files['app/Http/Controllers/RegisterController.php'] ?? '') === 1) {
             $findings[] = [
                 'severity' => 'Alta',
                 'title' => 'La contraseña se asigna sin un hash explícito',
@@ -929,8 +929,9 @@ class AsistenteController extends Controller
     {
         $openTasks = $project->tareas->whereIn('estado', ['Pendiente', 'En progreso', 'En revisión']);
         $highPriorityTasks = $openTasks->where('prioridad', 'Alta');
+        $today = now()->toDateString();
         $overdueTasks = $openTasks->filter(fn (Tarea $task) => $task->fecha_limite
-            && $task->fecha_limite->startOfDay()->isPast());
+            && (string) $task->fecha_limite < $today);
         $activeBugs = $project->bugs->whereNotIn('estado', ['Solucionado', 'Cerrado']);
         $highPriorityBugs = $activeBugs->where('prioridad', 'Alta');
         $functionalities = $project->secciones->flatMap(fn ($section) => $section->funcionalidades);
@@ -3394,7 +3395,8 @@ class AsistenteController extends Controller
                         "La tarea \"{$tarea->titulo}\" superó su fecha límite y continúa abierta.",
                         'Una tarea vencida debería estar completada, cancelada o tener una nueva fecha límite justificada.',
                         'Actualizar el avance, completar la tarea o modificar su fecha límite y dejar constancia del motivo.',
-                        "Fecha límite: {$tarea->fecha_limite->format('d/m/Y')}\nEstado actual: {$tarea->estado}\nDías de retraso: {$tarea->fecha_limite->startOfDay()->diffInDays($hoy)}"
+                        "Fecha límite: {$tarea->fecha_limite->format('d/m/Y')}\nEstado actual: {$tarea->estado}\nDías de retraso: ".
+                        intdiv(abs(strtotime($hoy->toDateString()) - strtotime($tarea->fecha_limite->format('Y-m-d'))), 86400)
                     ),
                     'priority' => 'Alta',
                 ];

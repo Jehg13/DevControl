@@ -6,6 +6,19 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Services\DevControlAlertService;
 
+/**
+ * @property int $id
+ * @property string $nombre
+ * @property string|null $descripcion
+ * @property string|null $contexto
+ * @property string|null $objetivo
+ * @property string|null $tecnologias
+ * @property string|null $reglas
+ * @property string|null $repositorio_url
+ * @property \Illuminate\Support\Carbon|null $fecha_inicio
+ * @property \Illuminate\Support\Carbon|null $fecha_meta
+ * @property int|null $progreso
+ */
 class Proyecto extends Model
 {
     use HasFactory;
@@ -82,5 +95,15 @@ class Proyecto extends Model
     public function integracionGithub()
     {
         return $this->hasOne(Integracion::class)->where('proveedor', 'github');
+    }
+
+    public function nexusUnderstandings()
+    {
+        return $this->hasMany(NexusProjectUnderstanding::class, 'proyecto_id');
+    }
+
+    public function nexusInfrastructures()
+    {
+        return $this->hasMany(NexusInfrastructure::class, 'proyecto_id');
     }
 }

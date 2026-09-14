@@ -24,13 +24,25 @@ class NexusCodeAnalysisService
             'analyzed_path' => $relativePath ?: '.',
             'technologies' => $this->technologies($files),
             'structure' => $this->structure($files),
+            'files' => collect($files)->map(fn (\SplFileInfo $file): array => [
+                'path' => str_replace('\\', '/', $file->getRelativePathname()),
+                'extension' => strtolower($file->getExtension()),
+                'size' => $file->getSize(),
+            ])->values()->all(),
             'relevant_files' => $this->relevantFiles($files),
             'relationships' => $this->relationships($files),
+            'route_bindings' => $this->routeBindings($files),
             'symbols' => $this->symbols($files),
             'dependencies' => $this->dependencies($root),
             'documentation' => $includeDocumentation ? $this->documentation($root) : [],
+            'fingerprint' => $this->fingerprintFiles($files),
             'read_only' => true,
         ];
+    }
+
+    public function fingerprint(?string $relativePath = null): string
+    {
+        return $this->fingerprintFiles($this->files($this->resolveRoot($relativePath)));
     }
 
     private function resolveRoot(?string $relativePath): string
@@ -153,6 +165,33 @@ class NexusCodeAnalysisService
         return $symbols;
     }
 
+    private function routeBindings(array $files): array
+    {
+        $bindings = [];
+        foreach ($files as $file) {
+            if (preg_match('/(^|[\\\\\/])routes([\\\\\/].*)?\.php$/i', $file->getRelativePathname()) !== 1) {
+                continue;
+            }
+            $content = File::get($file->getPathname());
+            preg_match_all(
+                '/Route::(?:get|post|put|patch|delete|match|any)\s*\(\s*[\'"]([^\'"]+)[\'"][^;]*?\[\s*([A-Za-z_][A-Za-z0-9_\\\\]*)::class\s*,\s*[\'"]([^\'"]+)[\'"]\s*\]/s',
+                $content,
+                $matches,
+                PREG_SET_ORDER
+            );
+            foreach ($matches as $match) {
+                $bindings[] = [
+                    'route' => $match[1],
+                    'file' => str_replace('\\', '/', $file->getRelativePathname()),
+                    'controller' => $match[2],
+                    'action' => $match[3],
+                ];
+            }
+        }
+
+        return $bindings;
+    }
+
     private function dependencies(string $root): array
     {
         $dependencies = [];
@@ -180,6 +219,20 @@ class NexusCodeAnalysisService
                 'file' => $file->getFilename(),
                 'content' => Str::limit(File::get($file->getPathname()), 12000),
             ])->values()->all();
+    }
+
+    private function fingerprintFiles(array $files): string
+    {
+        $entries = collect($files)
+            ->map(fn (\SplFileInfo $file): string => implode(':', [
+                str_replace('\\', '/', $file->getRelativePathname()),
+                $file->getSize(),
+                $file->getMTime(),
+            ]))
+            ->sort()
+            ->implode('|');
+
+        return hash('sha256', $entries);
     }
 
     private function projectTechnologies(Proyecto $project): array

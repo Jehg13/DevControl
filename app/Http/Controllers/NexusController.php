@@ -7,6 +7,14 @@ use App\Nexus\NexusToolRegistry;
 use App\Services\NexusReasoningService;
 use App\Services\NexusExecutionService;
 use App\Services\NexusMemoryService;
+use App\Services\NexusProjectUnderstandingService;
+use App\Services\NexusPlannerService;
+use App\Services\NexusAutonomousExecutionService;
+use App\Models\NexusAutonomousRun;
+use App\Services\NexusInfrastructureService;
+use App\Services\NexusExperienceService;
+use App\Services\NexusOptimizationService;
+use App\Models\NexusOptimizationProposal;
 use App\Models\NexusRun;
 use Illuminate\Http\Request;
 use Throwable;
@@ -58,6 +66,144 @@ class NexusController extends Controller
         ], $run->status === 'failed' ? 503 : 200);
     }
 
+    public function autonomous(Request $request, NexusAutonomousExecutionService $autonomous)
+    {
+        $data = $request->validate([
+            'objective' => ['required', 'string', 'max:20000'],
+            'context' => ['nullable', 'array'],
+            'limits' => ['nullable', 'array'],
+        ]);
+
+        return response()->json([
+            'autonomous_run' => $autonomous->start(
+                $data['objective'],
+                $data['context'] ?? [],
+                $request->user()?->id,
+                'http_autonomous',
+                $data['limits'] ?? [],
+            ),
+        ]);
+    }
+
+    public function resumeAutonomous(
+        Request $request,
+        NexusAutonomousRun $autonomousRun,
+        NexusAutonomousExecutionService $autonomous
+    ) {
+        $data = $request->validate(['approved' => ['nullable', 'boolean']]);
+
+        return response()->json([
+            'autonomous_run' => $autonomous->resume(
+                $autonomousRun,
+                $request->user()?->id,
+                (bool) ($data['approved'] ?? false),
+            ),
+        ]);
+    }
+
+    public function pauseAutonomous(
+        NexusAutonomousRun $autonomousRun,
+        NexusAutonomousExecutionService $autonomous
+    ) {
+        return response()->json(['autonomous_run' => $autonomous->pause($autonomousRun)]);
+    }
+
+    public function autonomousRun(NexusAutonomousRun $autonomousRun)
+    {
+        return response()->json([
+            'autonomous_run' => $autonomousRun->load(['run.toolCalls', 'planModel']),
+        ]);
+    }
+
+    public function infrastructure(Request $request, NexusInfrastructureService $infrastructure)
+    {
+        $data = $request->validate([
+            'project_id' => ['nullable', 'integer', 'min:1'],
+            'infrastructure_id' => ['nullable', 'integer', 'min:1'],
+            'endpoint' => ['nullable', 'url', 'max:500'],
+            'timeout' => ['nullable', 'integer', 'min:1', 'max:30'],
+            'thresholds' => ['nullable', 'array'],
+        ]);
+
+        $result = $infrastructure->inspect(
+            $data['project_id'] ?? null,
+            $data['infrastructure_id'] ?? null,
+            $data['endpoint'] ?? null,
+            (int) ($data['timeout'] ?? config('nexus.infrastructure.default_timeout', 5)),
+            $data['thresholds'] ?? [],
+            $request->user()?->id,
+        );
+
+        return ($result['available'] ?? false)
+            ? response()->json(['infrastructure' => $result])
+            : response()->json($result, 404);
+    }
+
+    public function experiences(Request $request, NexusExperienceService $experiences)
+    {
+        $data = $request->validate([
+            'query' => ['required', 'string', 'max:4000'],
+            'project_id' => ['nullable', 'integer', 'min:1'],
+            'technologies' => ['nullable', 'array'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:20'],
+        ]);
+
+        return response()->json([
+            'experiences' => $experiences->similar(
+                $data['query'],
+                $data['project_id'] ?? null,
+                $data['technologies'] ?? [],
+                (int) ($data['limit'] ?? 5),
+            ),
+        ]);
+    }
+
+    public function optimizationReport(Request $request, NexusOptimizationService $optimization)
+    {
+        $data = $request->validate(['project_id' => ['nullable', 'integer', 'min:1']]);
+
+        return response()->json([
+            'report' => $optimization->report($data['project_id'] ?? null),
+            'proposals' => $optimization->propose($data['project_id'] ?? null),
+        ]);
+    }
+
+    public function approveOptimization(
+        Request $request,
+        NexusOptimizationProposal $proposal,
+        NexusOptimizationService $optimization
+    ) {
+        abort_unless((bool) $request->user(), 403);
+
+        return response()->json([
+            'proposal' => $optimization->approve($proposal, (int) $request->user()->id),
+        ]);
+    }
+
+    public function plan(Request $request, NexusPlannerService $planner, NexusToolRegistry $tools)
+    {
+        $data = $request->validate([
+            'objective' => ['required', 'string', 'max:20000'],
+            'context' => ['nullable', 'array'],
+            'project' => ['nullable', 'array'],
+            'restrictions' => ['nullable', 'array'],
+            'permissions' => ['nullable', 'array'],
+        ]);
+
+        $result = $planner->create(
+            $data['objective'],
+            $data['context'] ?? [],
+            $data['project'] ?? [],
+            $data['restrictions'] ?? [],
+            $data['permissions'] ?? [],
+            $tools->definitions(),
+        );
+
+        return $result->successful
+            ? response()->json(['plan' => $result->response?->toArray()])
+            : response()->json($result->toArray(), 503);
+    }
+
     public function run(NexusRun $run)
     {
         return response()->json(['run' => $run->load(['toolCalls', 'plan'])]);
@@ -97,6 +243,46 @@ class NexusController extends Controller
                 ->latest()
                 ->limit(100)
                 ->get(),
+        ]);
+    }
+
+    public function projectUnderstanding(Request $request, NexusProjectUnderstandingService $understanding)
+    {
+        $data = $request->validate([
+            'project_id' => ['nullable', 'integer', 'min:1'],
+            'path' => ['nullable', 'string', 'max:300'],
+            'include_documentation' => ['nullable', 'boolean'],
+            'refresh' => ['nullable', 'boolean'],
+        ]);
+
+        return response()->json([
+            'understanding' => $understanding->understand(
+                $data['project_id'] ?? null,
+                $data['path'] ?? null,
+                (bool) ($data['include_documentation'] ?? true),
+                (bool) ($data['refresh'] ?? false),
+                $request->user()?->id,
+            ),
+        ]);
+    }
+
+    public function projectQuestion(Request $request, NexusProjectUnderstandingService $understanding)
+    {
+        $data = $request->validate([
+            'question' => ['required', 'string', 'max:2000'],
+            'project_id' => ['nullable', 'integer', 'min:1'],
+            'path' => ['nullable', 'string', 'max:300'],
+            'refresh' => ['nullable', 'boolean'],
+        ]);
+
+        return response()->json([
+            'answer' => $understanding->query(
+                $data['question'],
+                $data['project_id'] ?? null,
+                $data['path'] ?? null,
+                (bool) ($data['refresh'] ?? false),
+                $request->user()?->id,
+            ),
         ]);
     }
 

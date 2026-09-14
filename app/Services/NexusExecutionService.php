@@ -18,6 +18,7 @@ class NexusExecutionService
         private readonly NexusStateService $state,
         private readonly NexusPlanService $plans,
         private readonly NexusReflectionService $reflection,
+        private readonly NexusOptimizationService $optimization,
     ) {
     }
 
@@ -29,6 +30,8 @@ class NexusExecutionService
         string $source = 'application',
         bool $confirmed = false,
         ?string $conversationKey = null,
+        ?array $allowedTools = null,
+        array $prohibitedTools = [],
     ): NexusRun {
         $conversation = $this->memory->conversation(
             $conversationKey ?? 'run-'.$userId.'-'.hash('sha256', $message),
@@ -69,7 +72,8 @@ class NexusExecutionService
                     $message,
                     $retrievedContext,
                     [],
-                    $toolResults
+                    $toolResults,
+                    $this->filterTools($allowedTools, $prohibitedTools)
                 );
 
                 if (! $reasoning->successful) {
@@ -135,6 +139,16 @@ class NexusExecutionService
                 }
 
                 foreach ($lastResponse->toolCalls as $call) {
+                    if ($this->toolIsProhibited($call['name'], $allowedTools, $prohibitedTools)) {
+                        return $this->fail(
+                            $run,
+                            'tool_not_allowed',
+                            'La herramienta solicitada no está permitida por los límites de esta ejecución.',
+                            $internalState,
+                            $conversation
+                        );
+                    }
+
                     $signature = hash('sha256', json_encode([
                         $call['name'],
                         $call['arguments'],
@@ -167,7 +181,10 @@ class NexusExecutionService
                         new NexusToolContext(
                             user: $userId ? \App\Models\User::find($userId) : null,
                             source: $source,
-                            confirmed: $confirmed
+                            confirmed: $confirmed,
+                            grantedPermissions: $context['granted_permissions'] ?? $context['permissions'] ?? [],
+                            runId: $run->id,
+                            projectId: $context['project_id'] ?? $context['proyecto_id'] ?? null,
                         )
                     );
 
@@ -244,7 +261,10 @@ class NexusExecutionService
             new NexusToolContext(
                 user: $userId ? \App\Models\User::find($userId) : null,
                 source: $source,
-                confirmed: true
+                confirmed: true,
+                grantedPermissions: $context['granted_permissions'] ?? $context['permissions'] ?? [],
+                runId: $run->id,
+                projectId: $context['project_id'] ?? $context['proyecto_id'] ?? null,
             )
         );
         $toolCall->update([
@@ -265,6 +285,28 @@ class NexusExecutionService
         ];
     }
 
+    private function filterTools(?array $allowedTools, array $prohibitedTools): ?array
+    {
+        if ($allowedTools === null && $prohibitedTools === []) {
+            return null;
+        }
+
+        $prohibited = array_values(array_filter($prohibitedTools, 'is_string'));
+        $definitions = $this->tools->definitions();
+
+        return array_values(array_filter(
+            $definitions,
+            fn (array $definition): bool => ($allowedTools === null || in_array($definition['name'], $allowedTools, true))
+                && ! in_array($definition['name'], $prohibited, true)
+        ));
+    }
+
+    private function toolIsProhibited(string $toolName, ?array $allowedTools, array $prohibitedTools): bool
+    {
+        return in_array($toolName, $prohibitedTools, true)
+            || ($allowedTools !== null && ! in_array($toolName, $allowedTools, true));
+    }
+
     private function complete(NexusRun $run, array $result, string $status = 'completed', ?array $state = null, ?\App\Models\NexusConversation $conversation = null): NexusRun
     {
         $run->update(['status' => $status, 'result' => $result]);
@@ -275,6 +317,7 @@ class NexusExecutionService
         if ($state !== null) {
             $this->state->persist($run, $state);
         }
+        $this->optimization->record($run->fresh());
 
         return $run->fresh('toolCalls');
     }
@@ -303,6 +346,7 @@ class NexusExecutionService
         if ($state !== []) {
             $this->state->persist($run, $this->state->markFailure($state, $message));
         }
+        $this->optimization->record($run->fresh());
 
         return $run->fresh('toolCalls');
     }

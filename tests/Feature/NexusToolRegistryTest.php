@@ -22,6 +22,14 @@ class NexusToolRegistryTest extends TestCase
         $this->assertSame(['tests.execute'], $definitions[0]['permissions']);
     }
 
+    public function test_registry_rejects_duplicate_tool_names(): void
+    {
+        $this->expectException(\App\Exceptions\NexusToolException::class);
+        $this->expectExceptionMessage('ya está registrada');
+
+        new NexusToolRegistry([$this->tool(), $this->tool()]);
+    }
+
     public function test_tool_rejects_invalid_parameters(): void
     {
         $result = (new NexusToolRegistry([$this->tool()]))->execute(
@@ -95,6 +103,48 @@ class NexusToolRegistryTest extends TestCase
         $this->assertNotNull($definition);
         $this->assertSame(['nexus.write'], $definition['permissions']);
         $this->assertTrue($definition['requires_confirmation']);
+    }
+
+    public function test_project_understanding_tools_are_registered_as_read_only(): void
+    {
+        foreach (['nexus.project.understand', 'nexus.project.query'] as $name) {
+            $definition = collect(app(NexusToolRegistry::class)->definitions())
+                ->firstWhere('name', $name);
+
+            $this->assertNotNull($definition);
+            $this->assertSame(['nexus.read'], $definition['permissions']);
+            $this->assertFalse($definition['requires_confirmation']);
+        }
+    }
+
+    public function test_planner_tool_is_registered_without_project_mutation_confirmation(): void
+    {
+        $definition = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.plan.create');
+
+        $this->assertNotNull($definition);
+        $this->assertSame(['nexus.read'], $definition['permissions']);
+        $this->assertFalse($definition['requires_confirmation']);
+    }
+
+    public function test_github_tools_expose_read_and_protected_write_operations(): void
+    {
+        $inspect = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.github.inspect');
+        $write = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.github.file.write');
+
+        $this->assertSame(['nexus.read'], $inspect['permissions']);
+        $this->assertFalse($inspect['requires_confirmation']);
+        $this->assertSame(['nexus.write', 'github.write'], $write['permissions']);
+        $this->assertTrue($write['requires_confirmation']);
+
+        $mutation = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.github.write');
+        $this->assertSame(['nexus.write', 'github.write'], $mutation['permissions']);
+        $this->assertTrue($mutation['requires_confirmation']);
+        $this->assertSame('medium', $write['risk_level']);
+        $this->assertSame('medium', $mutation['risk_level']);
     }
 
     private function tool(): AbstractNexusTool

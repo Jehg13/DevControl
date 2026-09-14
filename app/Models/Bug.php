@@ -6,6 +6,16 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Services\DevControlAlertService;
 
+/**
+ * @property int $id
+ * @property int|null $proyecto_id
+ * @property string $folio
+ * @property string $titulo
+ * @property string|null $descripcion
+ * @property string|null $prioridad
+ * @property string|null $estado
+ * @property \Illuminate\Support\Carbon|null $fecha_detectado
+ */
 class Bug extends Model
 {
     use HasFactory;

@@ -22,6 +22,13 @@ final class NexusToolRegistry
 
     public function register(NexusTool $tool): self
     {
+        if (isset($this->tools[$tool->name()])) {
+            throw new NexusToolException(
+                "La herramienta [{$tool->name()}] ya está registrada.",
+                'duplicate_tool'
+            );
+        }
+
         $this->tools[$tool->name()] = $tool;
 
         return $this;
@@ -36,6 +43,7 @@ final class NexusToolRegistry
                 'description' => $tool->description(),
                 'parameters' => $tool->parameters(),
                 'permissions' => $tool->permissions(),
+                'risk_level' => app(\App\Services\NexusPermissionManager::class)->risk($tool->name(), $tool->permissions()),
                 'requires_confirmation' => $tool->requiresConfirmation(),
             ],
             $this->tools

@@ -6,6 +6,20 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * @property int $id
+ * @property int|null $usuario_id
+ * @property int|null $nexus_conversation_id
+ * @property string|null $source
+ * @property string|null $message
+ * @property string|null $status
+ * @property int|null $steps
+ * @property array|null $context
+ * @property array|null $internal_state
+ * @property array|null $result
+ * @property array|null $reflection
+ * @property string|null $error
+ */
 class NexusRun extends Model
 {
     protected $table = 'nexus_runs';
@@ -49,5 +63,10 @@ class NexusRun extends Model
     public function plan(): \Illuminate\Database\Eloquent\Relations\HasOne
     {
         return $this->hasOne(NexusPlan::class);
+    }
+
+    public function autonomousRun(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(NexusAutonomousRun::class);
     }
 }

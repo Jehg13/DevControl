@@ -5,6 +5,20 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use App\Services\DevControlAlertService;
 
+/**
+ * @property int $id
+ * @property int|null $proyecto_id
+ * @property int|null $usuario_id
+ * @property int|null $seccion_id
+ * @property int|null $funcionalidad_id
+ * @property string $titulo
+ * @property string|null $descripcion
+ * @property string|null $prioridad
+ * @property string|null $estado
+ * @property \Illuminate\Support\Carbon|null $fecha_inicio
+ * @property \Illuminate\Support\Carbon|null $fecha_limite
+ * @property \Illuminate\Support\Carbon|null $fecha_completada
+ */
 class Tarea extends Model
 {
     protected $table = 'tareas';
@@ -40,7 +54,7 @@ class Tarea extends Model
                 [
                     'Prioridad' => $tarea->prioridad,
                     'Estado' => $tarea->estado,
-                    'Fecha límite' => $tarea->fecha_limite?->format('Y-m-d') ?: 'Sin fecha límite',
+                    'Fecha límite' => $tarea->fecha_limite ? (string) $tarea->fecha_limite : 'Sin fecha límite',
                 ]
             );
         });
@@ -58,7 +72,7 @@ class Tarea extends Model
                 [
                     'Prioridad' => $tarea->prioridad,
                     'Estado' => $tarea->estado,
-                    'Fecha límite' => $tarea->fecha_limite?->format('Y-m-d') ?: 'Sin fecha límite',
+                    'Fecha límite' => $tarea->fecha_limite ? (string) $tarea->fecha_limite : 'Sin fecha límite',
                 ]
             );
         });
