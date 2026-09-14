@@ -1,0 +1,7 @@
+[
+  {"id":"project-001","task":"analyze_project","prompt":"Analiza el proyecto con evidencia de repositorio y tareas.","expected_status":"supported","expected_contains":["repository"]},
+  {"id":"incident-001","task":"explain_incident","prompt":"Explica la incidencia con los logs disponibles.","expected_status":"supported","expected_contains":["logs"]},
+  {"id":"missing-001","task":"probable_cause","prompt":"Determina la causa, pero no se proporcionan logs, cambios ni métricas.","expected_status":"insufficient_evidence","expected_contains":["evidencia"]},
+  {"id":"impact-001","task":"change_impact","prompt":"Determina el impacto del cambio en la migración y el modelo.","expected_status":"supported","expected_contains":["migration"]},
+  {"id":"repair-001","task":"repair_plan","prompt":"Genera un plan de reparación para el bug reproducible.","expected_status":"supported","expected_contains":["plan"]}
+]

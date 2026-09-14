@@ -1,0 +1,21 @@
+[
+  {
+    "id": "project-scope",
+    "query": "migration users project alpha",
+    "project_id": "alpha",
+    "relevant_ids": ["knowledge-migration"],
+    "forbidden_ids": ["project-beta-secret"],
+    "max_items": 3,
+    "max_tokens": 128
+  },
+  {
+    "id": "session-scope",
+    "query": "failed deployment logs",
+    "project_id": "alpha",
+    "session_id": "session-2",
+    "relevant_ids": ["conversation-current"],
+    "forbidden_ids": ["conversation-old"],
+    "max_items": 2,
+    "max_tokens": 128
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "project": "devcontrol",
+    "changes": ["breaking change in production deployment"],
+    "logs": ["error rate spike and timeout"],
+    "metrics": ["latency anomalous"],
+    "location": "api",
+    "expected": ["dangerous change", "degradation", "anomaly"]
+  },
+  {
+    "project": "devcontrol",
+    "logs": ["normal request completed"],
+    "metrics": ["latency stable"],
+    "expected": []
+  }
+]

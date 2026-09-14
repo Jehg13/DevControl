@@ -1,0 +1,26 @@
+[
+  {
+    "id": "database-failure",
+    "input": {
+      "diagnostic_id": "db-1",
+      "error": "SQLSTATE migration failed with 500 in production",
+      "logs": ["QueryException: relation users does not exist"],
+      "recent_changes": ["commit added users migration"],
+      "code": ["UserRepository queries users table"],
+      "configuration": ["database host is configured"],
+      "history": ["previous deploy succeeded"]
+    },
+    "expected": {"status": "supported", "cause": "database", "severity": "critical"}
+  },
+  {
+    "id": "insufficient",
+    "input": {
+      "diagnostic_id": "unknown-1",
+      "error": "",
+      "logs": [],
+      "code": [],
+      "recent_changes": []
+    },
+    "expected": {"status": "insufficient_evidence", "cause": null}
+  }
+]

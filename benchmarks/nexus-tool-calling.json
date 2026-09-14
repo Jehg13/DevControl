@@ -1,0 +1,46 @@
+[
+  {
+    "id": "valid-search",
+    "call": {
+      "tool": "search_file",
+      "parameters": {"path": "app/Services/Nexus.php", "query": "execute"},
+      "reason": "Locate the execution boundary.",
+      "expected_result": "Matching lines and file locations."
+    },
+    "permissions": ["nexus.tool.search_file"],
+    "expected_status": "completed"
+  },
+  {
+    "id": "invalid-unknown",
+    "call": {
+      "tool": "invented_tool",
+      "parameters": {},
+      "reason": "Try an unavailable capability.",
+      "expected_result": "A result."
+    },
+    "permissions": [],
+    "expected_status": "invalid"
+  },
+  {
+    "id": "blocked-write",
+    "call": {
+      "tool": "modify_file",
+      "parameters": {"path": "app/Services/Nexus.php", "content": "..."},
+      "reason": "Apply an approved change.",
+      "expected_result": "File changed and verified."
+    },
+    "permissions": [],
+    "expected_status": "permission_required"
+  },
+  {
+    "id": "invalid-schema",
+    "call": {
+      "tool": "run_tests",
+      "parameters": {},
+      "reason": "",
+      "expected_result": "Tests run."
+    },
+    "permissions": ["nexus.tool.run_tests"],
+    "expected_status": "invalid"
+  }
+]
