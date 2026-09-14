@@ -91,7 +91,7 @@ class OpenAICompatibleNexusModel implements NexusModel
             '  "message": "respuesta breve para el usuario",'."\n".
             '  "tool_calls": [{"name": "nombre.exacto", "arguments": {}}],'."\n".
             '  "requires_confirmation": false,'."\n".
-            '  "metadata": {"confidence": 0, "plan": ["paso verificable"], "target_files": []}'."\n".
+            '  "metadata": {"confidence": 0, "objective": "", "priority": 50, "subtasks": [{"id": "subtask-1", "title": "", "dependencies": [], "priority": 50, "status": "pending", "expected_result": "", "completion_criteria": ""}], "expected_result": "", "completion_criteria": "", "target_files": []}'."\n".
             "}\n\n".
             "No inventes herramientas ni argumentos. Si no corresponde una herramienta, devuelve tool_calls como []. ".
             "Las herramientas solo se describen; otra capa decidirá si se ejecutan.\n\n".

@@ -60,7 +60,7 @@ class NexusController extends Controller
 
     public function run(NexusRun $run)
     {
-        return response()->json(['run' => $run->load('toolCalls')]);
+        return response()->json(['run' => $run->load(['toolCalls', 'plan'])]);
     }
 
     public function memories(Request $request)

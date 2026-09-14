@@ -16,6 +16,7 @@ class NexusExecutionService
         private readonly NexusToolRegistry $tools,
         private readonly NexusMemoryService $memory,
         private readonly NexusStateService $state,
+        private readonly NexusPlanService $plans,
     ) {
     }
 
@@ -56,6 +57,7 @@ class NexusExecutionService
             $this->state->persist($run, $internalState);
         }
         $lastResponse = null;
+        $plan = null;
         $maxSteps = max(1, (int) config('nexus.ai.max_steps', 5));
 
         try {
@@ -80,6 +82,10 @@ class NexusExecutionService
 
                 $lastResponse = $reasoning->response;
                 $internalState = $this->state->afterReasoning($internalState, $lastResponse->toArray(), $step);
+                $plan = $this->plans->createOrUpdate($run, $lastResponse->metadata, $message) ?? $plan;
+                if ($plan) {
+                    $internalState['plan'] = $plan->toArray();
+                }
                 $this->state->persist($run, $internalState);
                 if ($lastResponse->toolCalls === []) {
                     $this->memory->recordMessage($conversation, 'assistant', $lastResponse->message, ['run_id' => $run->id]);
@@ -90,6 +96,10 @@ class NexusExecutionService
                         $context
                     );
                     $internalState['next_action'] = 'completed';
+                    if ($plan) {
+                        $plan = $this->plans->complete($plan);
+                        $internalState['plan'] = $plan->toArray();
+                    }
                     return $this->complete($run, $lastResponse->toArray(), 'completed', $internalState);
                 }
 
@@ -169,6 +179,10 @@ class NexusExecutionService
                         $result->toArray(),
                         $step
                     );
+                    if ($plan) {
+                        $plan = $this->plans->updateAfterAction($plan, $call['name'], $result->toArray());
+                        $internalState['plan'] = $plan->toArray();
+                    }
                     $this->state->persist($run, $internalState);
                     $toolResults[] = [
                         'tool' => $call['name'],

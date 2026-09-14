@@ -43,4 +43,9 @@ class NexusRun extends Model
     {
         return $this->hasMany(NexusToolCall::class);
     }
+
+    public function plan(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(NexusPlan::class);
+    }
 }
