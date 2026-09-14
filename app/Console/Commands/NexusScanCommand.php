@@ -2,7 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Services\NexusAuditService;
+use App\Nexus\NexusToolContext;
+use App\Nexus\NexusToolRegistry;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -11,7 +12,7 @@ class NexusScanCommand extends Command
     protected $signature = 'nexus:scan {--project= : ID del proyecto a revisar}';
     protected $description = 'Analiza DevControl localmente y persiste hallazgos sin modificar datos de negocio';
 
-    public function handle(NexusAuditService $scanner): int
+    public function handle(NexusToolRegistry $tools): int
     {
         try {
             $project = $this->option('project');
@@ -19,8 +20,19 @@ class NexusScanCommand extends Command
                 $this->error('El proyecto debe ser un ID numérico positivo.');
                 return self::INVALID;
             }
-            $result = $scanner->scan($project ? (int) $project : null);
-            $this->info("Escaneo completado: {$result['detected']} hallazgos detectados, {$result['saved']} persistidos.");
+            $result = $tools->execute(
+                'nexus.audit.scan',
+                ['project_id' => $project ? (int) $project : null],
+                new NexusToolContext(source: 'artisan', system: true)
+            );
+
+            if (! $result->successful) {
+                $this->error($result->error ?? 'El escaneo no pudo completarse.');
+
+                return self::FAILURE;
+            }
+
+            $this->info("Escaneo completado: {$result->data['detected']} hallazgos detectados, {$result->data['saved']} persistidos.");
             return self::SUCCESS;
         } catch (Throwable $exception) {
             $this->error('No fue posible completar el escaneo: '.$exception->getMessage());

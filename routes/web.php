@@ -53,6 +53,12 @@ Route::post('/logout', function (Request $request) {
 Route::middleware(['auth', 'role:admin'])->group(function () {
 Route::get('/dashboard/asistente', [AsistenteController::class, 'index'])->name('asistente.index');
 Route::post('/dashboard/asistente/mensaje', [AsistenteController::class, 'message'])->name('asistente.message');
+Route::get('/dashboard/asistente/herramientas', [NexusController::class, 'definitions'])->name('nexus.tools');
+Route::post('/dashboard/asistente/razonar', [NexusController::class, 'reason'])->name('nexus.reason');
+Route::post('/dashboard/asistente/ejecutar', [NexusController::class, 'execute'])->name('nexus.execute');
+Route::get('/dashboard/asistente/ejecuciones/{run}', [NexusController::class, 'run'])->name('nexus.run');
+Route::get('/dashboard/asistente/memoria', [NexusController::class, 'memories'])->name('nexus.memories');
+Route::delete('/dashboard/asistente/memoria/{memory}', [NexusController::class, 'forgetMemory'])->name('nexus.memory.forget');
 Route::get('/dashboard/asistente/hallazgos', [NexusController::class, 'findings'])->name('nexus.findings');
 Route::get('/dashboard/asistente/salud', [NexusController::class, 'health'])->name('nexus.health');
 Route::get('/dashboard/asistente/propuestas', [NexusController::class, 'proposals'])->name('nexus.proposals');

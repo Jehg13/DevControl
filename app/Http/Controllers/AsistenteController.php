@@ -16,6 +16,10 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use App\Services\NexusAuditService;
+use App\Services\NexusReasoningService;
+use App\Services\NexusMemoryService;
+use App\Nexus\NexusToolContext;
+use App\Nexus\NexusToolRegistry;
 
 class AsistenteController extends Controller
 {
@@ -134,7 +138,7 @@ class AsistenteController extends Controller
         ]);
     }
 
-    public function message(Request $request)
+    public function message(Request $request, NexusReasoningService $reasoning, NexusMemoryService $memory)
     {
         $validated = $request->validate([
             'message' => ['required', 'string', 'max:20000'],
@@ -142,6 +146,17 @@ class AsistenteController extends Controller
 
         $messages = $request->session()->get('assistant_messages', []);
         $messages[] = ['role' => 'user', 'content' => $validated['message']];
+        $conversation = $memory->conversation($request->session()->getId(), $request->user()?->id);
+        $memory->recordMessage($conversation, 'user', $validated['message'], ['source' => 'legacy_chat']);
+        $reasoningResult = $reasoning->reason(
+            $validated['message'],
+            $memory->relevantContext($conversation, $validated['message'], [
+                'route' => $request->route()?->getName(),
+                'user_role' => $request->user()?->rol,
+                'pending_action' => $request->session()->get('assistant_pending_action'),
+                'modules' => $this->moduleStatus(),
+            ])
+        );
 
         $response = $this->processInstruction(
             $validated['message'],
@@ -149,6 +164,7 @@ class AsistenteController extends Controller
             $request->session()->get('assistant_pending_action')
         );
         $messages[] = $response['message'];
+        $memory->recordMessage($conversation, 'assistant', $response['message']['content'], ['source' => 'legacy_chat']);
         $request->session()->put('assistant_messages', array_slice($messages, -20));
 
         if (array_key_exists('pending_action', $response)) {
@@ -162,12 +178,15 @@ class AsistenteController extends Controller
         return response()->json([
             'message' => $response['message'],
             'navigation' => $response['navigation'],
+            'reasoning' => $reasoningResult->toArray(),
         ]);
     }
 
-    public function clear(Request $request)
+    public function clear(Request $request, \App\Services\NexusMemoryService $memory)
     {
         $request->session()->forget('assistant_messages');
+        $conversation = $memory->conversation($request->session()->getId(), $request->user()?->id);
+        $memory->clearConversation($conversation);
 
         return response()->json(['ok' => true]);
     }
@@ -1609,7 +1628,20 @@ class AsistenteController extends Controller
 
         if ($action['type'] === 'code_apply') {
             try {
-                $result = app(NexusAuditService::class)->applyProposal($action['finding_id']);
+                $toolResult = app(NexusToolRegistry::class)->execute(
+                    'nexus.audit.apply_proposal',
+                    ['finding_id' => $action['finding_id']],
+                    new NexusToolContext(auth()->user(), 'assistant', true)
+                );
+
+                if (! $toolResult->successful) {
+                    return $this->assistantResponse(
+                        'No apliqué la propuesta: '.($toolResult->error ?? 'la herramienta devolvió un error').'.',
+                        null
+                    );
+                }
+
+                $result = $toolResult->data;
 
                 return $this->assistantResponse(
                     'Listo. Apliqué la propuesta autorizada en: '.implode(', ', $result['files']).

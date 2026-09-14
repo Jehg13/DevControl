@@ -2,7 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Services\NexusAuditService;
+use App\Nexus\NexusToolContext;
+use App\Nexus\NexusToolRegistry;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Throwable;
@@ -16,7 +17,7 @@ class NexusWatchCommand extends Command
 
     protected $description = 'Vigila cambios locales y ejecuta el escaneo seguro de Nexus';
 
-    public function handle(NexusAuditService $scanner): int
+    public function handle(NexusToolRegistry $tools): int
     {
         $interval = (int) $this->option('interval');
 
@@ -42,10 +43,20 @@ class NexusWatchCommand extends Command
             }
 
             try {
-                $result = $scanner->scan();
+                $result = $tools->execute(
+                    'nexus.audit.scan',
+                    [],
+                    new NexusToolContext(source: 'artisan', system: true)
+                );
+
+                if (! $result->successful) {
+                    $this->error($result->error ?? 'El escaneo no pudo completarse.');
+
+                    return self::FAILURE;
+                }
 
                 if ($isInitialScan || $changedFiles !== [] || ! $this->option('silent')) {
-                    $this->info("Nexus revisó {$result['projects']} proyecto(s): {$result['detected']} hallazgo(s), {$result['saved']} persistido(s).");
+                    $this->info("Nexus revisó {$result->data['projects']} proyecto(s): {$result->data['detected']} hallazgo(s), {$result->data['saved']} persistido(s).");
                 }
             } catch (Throwable $exception) {
                 $this->error('El escaneo de Nexus falló: '.$exception->getMessage());

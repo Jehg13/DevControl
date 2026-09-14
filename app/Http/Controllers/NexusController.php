@@ -2,22 +2,118 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\NexusAuditService;
+use App\Nexus\NexusToolContext;
+use App\Nexus\NexusToolRegistry;
+use App\Services\NexusReasoningService;
+use App\Services\NexusExecutionService;
+use App\Services\NexusMemoryService;
+use App\Models\NexusRun;
 use Illuminate\Http\Request;
 use Throwable;
 
 class NexusController extends Controller
 {
-    public function findings(Request $request, NexusAuditService $scanner)
+    public function definitions(NexusToolRegistry $tools)
+    {
+        return response()->json(['herramientas' => $tools->definitions()]);
+    }
+
+    public function reason(Request $request, NexusReasoningService $reasoning, NexusMemoryService $memory)
+    {
+        $data = $request->validate([
+            'message' => ['required', 'string', 'max:20000'],
+            'context' => ['nullable', 'array'],
+        ]);
+
+        $conversation = $memory->conversation($request->session()->getId(), $request->user()?->id);
+        $result = $reasoning->reason(
+            $data['message'],
+            $memory->relevantContext($conversation, $data['message'], $data['context'] ?? [])
+        );
+
+        return $result->successful
+            ? response()->json($result->toArray())
+            : response()->json($result->toArray(), 503);
+    }
+
+    public function execute(Request $request, NexusExecutionService $execution)
+    {
+        $data = $request->validate([
+            'message' => ['required', 'string', 'max:20000'],
+            'context' => ['nullable', 'array'],
+            'confirmed' => ['nullable', 'boolean'],
+        ]);
+
+        $run = $execution->execute(
+            message: $data['message'],
+            context: $data['context'] ?? [],
+            userId: $request->user()?->id,
+            source: 'http',
+            confirmed: (bool) ($data['confirmed'] ?? false),
+            conversationKey: $request->session()->getId(),
+        );
+
+        return response()->json([
+            'run' => $run->load('toolCalls'),
+        ], $run->status === 'failed' ? 503 : 200);
+    }
+
+    public function run(NexusRun $run)
+    {
+        return response()->json(['run' => $run->load('toolCalls')]);
+    }
+
+    public function memories(Request $request)
+    {
+        return response()->json([
+            'memories' => \App\Models\NexusMemory::query()
+                ->where('usuario_id', $request->user()?->id)
+                ->latest()
+                ->limit(100)
+                ->get(),
+        ]);
+    }
+
+    public function forgetMemory(Request $request, \App\Models\NexusMemory $memory, NexusMemoryService $service)
+    {
+        $service->forget($memory, $request->user()?->id);
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function findings(Request $request, NexusToolRegistry $tools)
     {
         $data = $request->validate([
             'proyecto_id' => ['nullable', 'integer', 'min:1'],
             'tipo' => ['nullable', 'string', 'max:40'],
         ]);
         try {
+            $result = $tools->execute(
+                'nexus.audit.findings',
+                [
+                    'project_id' => $data['proyecto_id'] ?? null,
+                    'type' => $data['tipo'] ?? null,
+                ],
+                new NexusToolContext($request->user(), 'http')
+            );
+
+            if (! $result->successful) {
+                return response()->json(['message' => $result->error], 503);
+            }
+
+            $health = $tools->execute(
+                'nexus.audit.health',
+                [],
+                new NexusToolContext($request->user(), 'http')
+            );
+
+            if (! $health->successful) {
+                return response()->json(['message' => $health->error], 503);
+            }
+
             return response()->json([
-                'hallazgos' => $scanner->findings($data['proyecto_id'] ?? null, $data['tipo'] ?? null),
-                'salud' => $scanner->health(),
+                'hallazgos' => $result->data,
+                'salud' => $health->data,
             ]);
         } catch (Throwable $exception) {
             report($exception);
@@ -25,20 +121,38 @@ class NexusController extends Controller
         }
     }
 
-    public function health(NexusAuditService $scanner)
+    public function health(Request $request, NexusToolRegistry $tools)
     {
-        return response()->json($scanner->health());
+        $result = $tools->execute(
+            'nexus.audit.health',
+            [],
+            new NexusToolContext($request->user(), 'http')
+        );
+
+        return $result->successful
+            ? response()->json($result->data)
+            : response()->json(['message' => $result->error], 503);
     }
 
-    public function proposals(Request $request, NexusAuditService $scanner)
+    public function proposals(Request $request, NexusToolRegistry $tools)
     {
         $data = $request->validate([
             'proyecto_id' => ['nullable', 'integer', 'min:1'],
         ]);
 
         try {
+            $result = $tools->execute(
+                'nexus.audit.proposals',
+                ['project_id' => $data['proyecto_id'] ?? null],
+                new NexusToolContext($request->user(), 'http')
+            );
+
+            if (! $result->successful) {
+                return response()->json(['message' => $result->error], 503);
+            }
+
             return response()->json([
-                'propuestas' => $scanner->proposals($data['proyecto_id'] ?? null),
+                'propuestas' => $result->data,
             ]);
         } catch (Throwable $exception) {
             report($exception);
