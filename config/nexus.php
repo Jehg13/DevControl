@@ -16,6 +16,8 @@ return [
         'message_candidates' => (int) env('NEXUS_MEMORY_MESSAGE_CANDIDATES', 80),
         'relevant_messages' => (int) env('NEXUS_MEMORY_RELEVANT_MESSAGES', 6),
         'relevant_memories' => (int) env('NEXUS_MEMORY_RELEVANT_MEMORIES', 8),
+        'automatic_min_confidence' => (int) env('NEXUS_MEMORY_AUTOMATIC_MIN_CONFIDENCE', 75),
+        'deduplication_threshold' => (float) env('NEXUS_MEMORY_DEDUPLICATION_THRESHOLD', 0.75),
     ],
     'modules' => [
         'proyectos' => ['label' => 'Proyectos', 'route' => 'proyectos.index'],

@@ -30,10 +30,106 @@ class NexusMemoryService
         $conversation->update(['last_activity_at' => now()]);
 
         if ($role === 'user') {
-            $this->extractExplicitMemory($conversation, $content);
+            $this->extractExplicitMemory($conversation, $content, $metadata['project_id'] ?? null);
         }
 
         return $message;
+    }
+
+    /**
+     * Stores only a classified, sufficiently reliable long-term memory.
+     */
+    public function remember(
+        NexusConversation $conversation,
+        string $type,
+        string $content,
+        int $confidence,
+        array $metadata = [],
+    ): ?NexusMemory {
+        $allowedTypes = [
+            'project', 'decision', 'experience', 'problem',
+            'solution', 'preference', 'knowledge',
+        ];
+        $content = trim(preg_replace('/\s+/u', ' ', $content) ?? $content);
+        $confidence = max(0, min(100, $confidence));
+
+        if (! in_array($type, $allowedTypes, true)
+            || $content === ''
+            || $confidence < (int) config('nexus.memory.automatic_min_confidence', 75)
+            || $this->containsSensitiveData($content)) {
+            return null;
+        }
+
+        $projectId = $metadata['project_id'] ?? null;
+        $key = $this->memoryKey($type, $content);
+        $existing = NexusMemory::query()
+            ->where('usuario_id', $conversation->usuario_id)
+            ->where('memory_type', $type)
+            ->where('status', 'active')
+            ->when($projectId !== null, fn ($query) => $query->where('proyecto_id', $projectId))
+            ->get()
+            ->first(fn (NexusMemory $memory) => $this->similarity($memory->content, $content)
+                >= (float) config('nexus.memory.deduplication_threshold', 0.75));
+
+        if ($existing) {
+            $existing->update([
+                'confidence' => max($existing->confidence, $confidence),
+                'importance' => max($existing->importance, (int) ($metadata['importance'] ?? 60)),
+                'last_confirmed_at' => now(),
+                'metadata' => array_merge($existing->metadata ?? [], $metadata),
+            ]);
+
+            return $existing->fresh();
+        }
+
+        return NexusMemory::create([
+            'usuario_id' => $conversation->usuario_id,
+            'nexus_conversation_id' => $conversation->id,
+            'proyecto_id' => $projectId,
+            'memory_key' => $key,
+            'memory_type' => $type,
+            'content' => $content,
+            'source' => $metadata['source'] ?? 'conversation',
+            'importance' => max(1, min(100, (int) ($metadata['importance'] ?? 60))),
+            'confidence' => $confidence,
+            'status' => 'active',
+            'metadata' => $metadata,
+            'last_confirmed_at' => now(),
+        ]);
+    }
+
+    public function promoteInteraction(
+        NexusConversation $conversation,
+        string $userMessage,
+        ?string $assistantMessage = null,
+        array $context = [],
+    ): array {
+        $candidates = [];
+        $projectId = $context['project_id'] ?? $context['proyecto_id'] ?? null;
+        $text = trim($userMessage.' '.($assistantMessage ?? ''));
+
+        foreach ([
+            'project' => '/\b(el proyecto|este proyecto|proyecto actual|proyecto se llama)\s*:?\s*(.{10,400})$/iu',
+            'decision' => '/\b(decidimos|decidí|hemos decidido|la decisión es)\s+(.{10,400})$/iu',
+            'problem' => '/\b(problema encontrado|el problema es|falló|falla)\s*:?\s*(.{10,400})$/iu',
+            'solution' => '/\b(solución|se resolvió|resuelto|la solución es)\s*:?\s*(.{10,400})$/iu',
+            'preference' => '/\b(prefiero|preferencia|trabajo mejor|no quiero)\s+(.{10,300})$/iu',
+            'knowledge' => '/\b(es importante|ten presente|conocimiento importante)\s*:?\s*(.{10,400})$/iu',
+            'experience' => '/\b(aprendimos|experiencia|descubrimos que)\s*:?\s*(.{10,400})$/iu',
+        ] as $type => $pattern) {
+            if (preg_match($pattern, $text, $matches)) {
+                $memory = $this->remember($conversation, $type, trim($matches[2]), 80, [
+                    'project_id' => $projectId,
+                    'source' => 'interaction',
+                    'importance' => 70,
+                ]);
+                if ($memory) {
+                    $candidates[] = $memory;
+                }
+            }
+        }
+
+        return $candidates;
     }
 
     public function relevantContext(
@@ -75,6 +171,7 @@ class NexusMemoryService
                             ->where('usuario_id', $conversation->usuario_id);
                     });
             })
+            ->where('status', 'active')
             ->when($projectId !== null, function ($query) use ($projectId): void {
                 $query->where(function ($query) use ($projectId): void {
                     $query->whereNull('proyecto_id')->orWhere('proyecto_id', $projectId);
@@ -108,8 +205,10 @@ class NexusMemoryService
             ])->all(),
             'persistent_memories' => $memories->map(fn (NexusMemory $memory) => [
                 'key' => $memory->memory_key,
+                'type' => $memory->memory_type,
                 'content' => $memory->content,
                 'importance' => $memory->importance,
+                'confidence' => $memory->confidence,
             ])->all(),
         ];
     }
@@ -129,27 +228,37 @@ class NexusMemoryService
         $conversation->update(['last_activity_at' => now()]);
     }
 
-    private function extractExplicitMemory(NexusConversation $conversation, string $content): void
+    private function extractExplicitMemory(NexusConversation $conversation, string $content, ?int $projectId = null): void
     {
         if (! preg_match('/^\s*(?:recuerda|recuerdame|ten presente)\s+(?:que\s+)?(.{10,500})$/iu', trim($content), $matches)) {
             return;
         }
 
         $memory = trim($matches[1]);
-        $key = mb_substr(preg_replace('/\s+/u', ' ', mb_strtolower($memory, 'UTF-8')), 0, 120);
+        $this->remember($conversation, 'knowledge', $memory, 100, [
+            'project_id' => $projectId,
+            'source' => 'explicit_user',
+            'importance' => 90,
+        ]);
+    }
 
-        NexusMemory::updateOrCreate(
-            [
-                'usuario_id' => $conversation->usuario_id,
-                'memory_key' => $key,
-            ],
-            [
-                'nexus_conversation_id' => $conversation->id,
-                'content' => $memory,
-                'source' => 'explicit_user',
-                'importance' => 90,
-            ]
-        );
+    private function memoryKey(string $type, string $content): string
+    {
+        return mb_substr($type.'-'.preg_replace('/\s+/u', '-', mb_strtolower($content, 'UTF-8')), 0, 120);
+    }
+
+    private function similarity(string $left, string $right): float
+    {
+        $leftTokens = $this->tokens($left);
+        $rightTokens = $this->tokens($right);
+        $union = count(array_unique(array_merge($leftTokens, $rightTokens)));
+
+        return $union === 0 ? 0.0 : count(array_intersect($leftTokens, $rightTokens)) / $union;
+    }
+
+    private function containsSensitiveData(string $content): bool
+    {
+        return preg_match('/\b(password|contraseña|token|api[_ -]?key|secret|credencial)\b\s*[:=]/iu', $content) === 1;
     }
 
     private function tokens(string $value): array

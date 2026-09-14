@@ -65,9 +65,17 @@ class NexusController extends Controller
 
     public function memories(Request $request)
     {
+        $data = $request->validate([
+            'type' => ['nullable', 'in:project,decision,experience,problem,solution,preference,knowledge'],
+            'proyecto_id' => ['nullable', 'integer', 'min:1'],
+        ]);
+
         return response()->json([
             'memories' => \App\Models\NexusMemory::query()
                 ->where('usuario_id', $request->user()?->id)
+                ->where('status', 'active')
+                ->when($data['type'] ?? null, fn ($query, $type) => $query->where('memory_type', $type))
+                ->when($data['proyecto_id'] ?? null, fn ($query, $projectId) => $query->where('proyecto_id', $projectId))
                 ->latest()
                 ->limit(100)
                 ->get(),

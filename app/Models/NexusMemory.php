@@ -14,16 +14,21 @@ class NexusMemory extends Model
         'nexus_conversation_id',
         'proyecto_id',
         'memory_key',
+        'memory_type',
         'content',
         'source',
         'importance',
+        'confidence',
+        'status',
         'metadata',
         'last_used_at',
+        'last_confirmed_at',
     ];
 
     protected $casts = [
         'metadata' => 'array',
         'last_used_at' => 'datetime',
+        'last_confirmed_at' => 'datetime',
     ];
 
     public function usuario(): BelongsTo

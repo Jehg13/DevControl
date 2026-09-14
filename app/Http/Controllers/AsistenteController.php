@@ -165,6 +165,12 @@ class AsistenteController extends Controller
         );
         $messages[] = $response['message'];
         $memory->recordMessage($conversation, 'assistant', $response['message']['content'], ['source' => 'legacy_chat']);
+        $memory->promoteInteraction(
+            $conversation,
+            $validated['message'],
+            $response['message']['content'],
+            ['project_id' => $request->input('project_id')]
+        );
         $request->session()->put('assistant_messages', array_slice($messages, -20));
 
         if (array_key_exists('pending_action', $response)) {

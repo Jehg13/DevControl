@@ -64,6 +64,12 @@ class NexusExecutionService
                 $lastResponse = $reasoning->response;
                 if ($lastResponse->toolCalls === []) {
                     $this->memory->recordMessage($conversation, 'assistant', $lastResponse->message, ['run_id' => $run->id]);
+                    $this->memory->promoteInteraction(
+                        $conversation,
+                        $message,
+                        $lastResponse->message,
+                        $context
+                    );
                     return $this->complete($run, $lastResponse->toArray());
                 }
 
