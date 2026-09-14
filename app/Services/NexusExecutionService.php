@@ -48,6 +48,13 @@ class NexusExecutionService
 
         $toolResults = [];
         $executedCalls = [];
+        $preflight = $this->preflightProgrammingTask($run, $message, $context, $userId, $source, $internalState);
+        if ($preflight !== null) {
+            $toolResults[] = $preflight['result'];
+            $executedCalls[$preflight['signature']] = true;
+            $internalState = $preflight['state'];
+            $this->state->persist($run, $internalState);
+        }
         $lastResponse = null;
         $maxSteps = max(1, (int) config('nexus.ai.max_steps', 5));
 
@@ -89,6 +96,18 @@ class NexusExecutionService
                 $requiresConfirmation = collect($lastResponse->toolCalls)
                     ->map(fn (array $call) => $this->tools->get($call['name']))
                     ->contains(fn ($tool) => $tool->requiresConfirmation());
+
+                if ($requiresConfirmation && ($internalState['plan'] ?? []) === []) {
+                    $internalState['phase'] = 'planning';
+                    $internalState['next_action'] = 'create_plan_before_changes';
+
+                    return $this->fail(
+                        $run,
+                        'plan_required',
+                        'Nexus debe crear un plan y definir los archivos objetivo antes de ejecutar cambios.',
+                        $internalState
+                    );
+                }
 
                 if ($requiresConfirmation && ! $confirmed) {
                     foreach ($lastResponse->toolCalls as $call) {
@@ -174,6 +193,58 @@ class NexusExecutionService
 
             return $this->fail($run, 'execution_failed', 'Nexus no pudo completar la ejecución.', $internalState ?? []);
         }
+    }
+
+    private function preflightProgrammingTask(
+        NexusRun $run,
+        string $message,
+        array $context,
+        ?int $userId,
+        string $source,
+        array $state,
+    ): ?array {
+        if (! preg_match('/\b(código|codigo|programa|programar|bug|error|función|funcion|clase|archivo|feature|refactor|implementar|modificar)\b/iu', $message)) {
+            return null;
+        }
+
+        $arguments = [
+            'project_id' => $context['project_id'] ?? $context['proyecto_id'] ?? null,
+            'include_documentation' => true,
+        ];
+        $signature = hash('sha256', json_encode(['nexus.code.analyze', $arguments], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $toolCall = NexusToolCall::create([
+            'nexus_run_id' => $run->id,
+            'sequence' => 1,
+            'tool_name' => 'nexus.code.analyze',
+            'arguments' => $arguments,
+            'status' => 'running',
+            'started_at' => now(),
+        ]);
+        $result = $this->tools->execute(
+            'nexus.code.analyze',
+            $arguments,
+            new NexusToolContext(
+                user: $userId ? \App\Models\User::find($userId) : null,
+                source: $source,
+                confirmed: true
+            )
+        );
+        $toolCall->update([
+            'status' => $result->successful ? 'succeeded' : 'failed',
+            'result' => $result->toArray(),
+            'error' => $result->successful ? null : $result->error,
+            'finished_at' => now(),
+        ]);
+
+        return [
+            'signature' => $signature,
+            'result' => [
+                'tool' => 'nexus.code.analyze',
+                'arguments' => $arguments,
+                'result' => $result->toArray(),
+            ],
+            'state' => $this->state->afterTool($state, 'nexus.code.analyze', $result->toArray(), 0, 'plan_task'),
+        ];
     }
 
     private function complete(NexusRun $run, array $result, string $status = 'completed', ?array $state = null): NexusRun

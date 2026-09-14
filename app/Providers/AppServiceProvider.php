@@ -10,6 +10,7 @@ use App\Nexus\Tools\AuditHealthTool;
 use App\Nexus\Tools\AuditProposalsTool;
 use App\Nexus\Tools\AuditScanTool;
 use App\Nexus\Tools\CodeAnalyzeTool;
+use App\Nexus\Tools\CodeValidateTool;
 use App\Nexus\Tools\IncidentCreateTool;
 use App\Nexus\Tools\BugCreateTool;
 use App\Nexus\Tools\BugDeleteTool;
@@ -43,6 +44,7 @@ class AppServiceProvider extends ServiceProvider
             return new NexusToolRegistry([
                 $app->make(AuditScanTool::class),
                 $app->make(CodeAnalyzeTool::class),
+                $app->make(CodeValidateTool::class),
                 $app->make(AuditFindingsTool::class),
                 $app->make(AuditHealthTool::class),
                 $app->make(AuditProposalsTool::class),

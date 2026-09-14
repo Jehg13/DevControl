@@ -17,6 +17,9 @@ class NexusStateService
         return [
             'current_goal' => $message,
             'current_task' => null,
+            'plan' => [],
+            'target_files' => [],
+            'phase' => 'understanding',
             'current_context' => $context,
             'last_action' => null,
             'last_action_result' => null,
@@ -70,8 +73,16 @@ class NexusStateService
     {
         $calls = $response['tool_calls'] ?? [];
 
+        $metadata = $response['metadata'] ?? [];
+        $phase = $calls === [] ? 'reporting' : (($metadata['plan'] ?? []) !== [] ? 'execution' : 'planning');
+
         return array_merge($state, [
             'current_task' => $response['intent'] ?? null,
+            'plan' => is_array($metadata['plan'] ?? null) ? array_values($metadata['plan']) : ($state['plan'] ?? []),
+            'target_files' => is_array($metadata['target_files'] ?? null)
+                ? array_values($metadata['target_files'])
+                : ($state['target_files'] ?? []),
+            'phase' => $phase,
             'last_action' => 'reasoning_step_'.$step,
             'last_action_result' => [
                 'intent' => $response['intent'] ?? null,
@@ -100,6 +111,7 @@ class NexusStateService
         }
 
         return array_merge($state, [
+            'phase' => $nextAction === 'validate_changes' ? 'validation' : 'execution',
             'current_task' => $toolName,
             'last_action' => 'tool:'.$toolName,
             'last_action_result' => $result,
