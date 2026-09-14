@@ -181,10 +181,22 @@ def train(
     vocab_size: int,
     config: TrainingConfig | None = None,
     resume: str | Path | None = None,
+    *,
+    require_approval: bool = False,
 ) -> dict:
     config = config or TrainingConfig()
     if config.epochs < 1 or config.learning_rate <= 0:
         raise ValueError("epochs must be positive and learning_rate must be positive")
+    if require_approval:
+        approval = Path(dataset_path) / "approval.json"
+        if not approval.is_file():
+            raise ValueError("training requires an explicitly approved dataset (approval.json)")
+        try:
+            approval_value = json.loads(approval.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError("dataset approval marker is invalid") from error
+        if approval_value.get("format") != "nexus-dataset-approval-v1":
+            raise ValueError("unsupported dataset approval marker")
     train_examples = _read_examples(dataset_path, "training")
     validation_examples = _read_examples(dataset_path, "validation")
     if not train_examples:
