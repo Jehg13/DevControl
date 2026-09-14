@@ -4,6 +4,7 @@ namespace App\Nexus;
 
 use App\Contracts\NexusTool;
 use App\Exceptions\NexusToolException;
+use App\Services\NexusSecurityBoundary;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -13,7 +14,7 @@ final class NexusToolRegistry
     private array $tools = [];
 
     /** @param iterable<NexusTool> $tools */
-    public function __construct(iterable $tools = [])
+    public function __construct(iterable $tools = [], private readonly ?NexusSecurityBoundary $security = null)
     {
         foreach ($tools as $tool) {
             $this->register($tool);
@@ -62,6 +63,12 @@ final class NexusToolRegistry
     public function execute(string $name, array $parameters = [], ?NexusToolContext $context = null): NexusToolResult
     {
         try {
+            ($this->security ?? app(NexusSecurityBoundary::class))->assertToolCall(
+                $name,
+                $parameters,
+                array_keys($this->tools)
+            );
+
             return $this->get($name)->execute($parameters, $context ?? new NexusToolContext());
         } catch (NexusToolException $exception) {
             return NexusToolResult::failure(

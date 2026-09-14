@@ -95,6 +95,19 @@ class NexusToolRegistryTest extends TestCase
         $this->assertFalse($definition['requires_confirmation']);
     }
 
+    public function test_action_tools_are_registered_with_their_real_permissions(): void
+    {
+        $status = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.git.status');
+        $commit = collect(app(NexusToolRegistry::class)->definitions())
+            ->firstWhere('name', 'nexus.github.local.commit');
+
+        $this->assertSame(['nexus.read'], $status['permissions']);
+        $this->assertFalse($status['requires_confirmation']);
+        $this->assertSame(['nexus.write', 'github.write'], $commit['permissions']);
+        $this->assertTrue($commit['requires_confirmation']);
+    }
+
     public function test_analysis_save_tool_requires_write_permission_and_confirmation(): void
     {
         $definition = collect(app(NexusToolRegistry::class)->definitions())

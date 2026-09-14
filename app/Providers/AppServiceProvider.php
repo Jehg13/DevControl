@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Contracts\NexusModel;
 use App\Nexus\NexusRuntime as CoreNexusRuntime;
 use App\Nexus\NexusToolRegistry;
+use App\Nexus\Tools\GitStatusTool;
+use App\Nexus\Tools\GithubLocalCommitTool;
 use App\Nexus\Tools\AuditApplyProposalTool;
 use App\Nexus\Tools\AuditFindingsTool;
 use App\Nexus\Tools\AuditHealthTool;
@@ -71,6 +73,8 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(DatasetGenerateTool::class),
                 $app->make(LearningAnalyzeTool::class),
                 $app->make(CodeValidateTool::class),
+                $app->make(GitStatusTool::class),
+                $app->make(GithubLocalCommitTool::class),
                 $app->make(AnalysisSaveTool::class),
                 $app->make(ProjectUnderstandTool::class),
                 $app->make(ProjectQueryTool::class),

@@ -3,6 +3,7 @@
 namespace App\Nexus;
 
 use App\Services\NexusExecutionService;
+use App\Models\Proyecto;
 use Illuminate\Support\Str;
 
 class NexusRuntime
@@ -10,11 +11,17 @@ class NexusRuntime
     public function __construct(
         private readonly NexusToolRegistry $tools,
         private readonly ?NexusExecutionService $execution = null,
+        private readonly ?NexusActionClassifier $actionClassifier = null,
     ) {
     }
 
     public function handle(NexusRuntimeRequest $request): NexusRuntimeResponse
     {
+        $action = ($this->actionClassifier ?? new NexusActionClassifier())->classify($request);
+        if ($action !== null) {
+            return $this->handleAction($request, $action);
+        }
+
         $intent = $this->classifyIntent($request->message);
         $intentName = $intent['intent'] ?? 'general';
 
@@ -36,6 +43,10 @@ class NexusRuntime
                 diagnosis: [],
                 solution: [],
                 verification: [],
+                plan: [],
+                selfEvaluation: [],
+                correlation: [],
+                explanationStyle: 'general',
                 status: 'completed',
                 source: 'runtime_general',
             );
@@ -68,6 +79,10 @@ class NexusRuntime
                     diagnosis: $result['diagnosis'] ?? [],
                     solution: $result['solution'] ?? [],
                     verification: $result['verification'] ?? [],
+                    plan: $result['plan'] ?? [],
+                    selfEvaluation: $result['self_evaluation'] ?? [],
+                    correlation: $result['correlation'] ?? [],
+                    explanationStyle: $result['explanation_style'] ?? 'general',
                     status: 'completed',
                     source: 'nexus_execution',
                 );
@@ -88,6 +103,10 @@ class NexusRuntime
                     diagnosis: [],
                     solution: [],
                     verification: [],
+                    plan: [],
+                    selfEvaluation: [],
+                    correlation: [],
+                    explanationStyle: 'general',
                     status: 'awaiting_confirmation',
                     source: 'nexus_execution',
                 );
@@ -140,9 +159,20 @@ class NexusRuntime
             }
         }
 
-        if ($intentName === 'diagnosis' && $this->needsAdditionalDiagnosisEvidence($toolResults)) {
-            $additionalPlan = $this->additionalDiagnosisPlan($request);
-            foreach ($additionalPlan as $call) {
+        if ($intentName === 'diagnosis') {
+            $autonomousIterations = 0;
+            $maxAutonomousIterations = 6;
+            $investigatedCalls = [];
+
+            while ($autonomousIterations < $maxAutonomousIterations) {
+                $call = $this->nextAutonomousDiagnosisCall($request, $toolResults, $investigatedCalls);
+                if ($call === null) {
+                    break;
+                }
+
+                $autonomousIterations++;
+                $callKey = $call['tool'].'|'.json_encode($call['arguments']);
+                $investigatedCalls[] = $callKey;
                 $toolName = $call['tool'];
                 $arguments = $call['arguments'];
                 $toolsUsed[] = $toolName;
@@ -160,12 +190,22 @@ class NexusRuntime
 
                 $investigation['steps'][] = [
                     'phase' => 'additional_evidence',
-                    'question' => '¿La salida del flujo llega a la capa de presentación?',
+                    'question' => $call['question'],
                     'tool' => $toolName,
                     'status' => $result->successful ? 'completed' : 'failed',
                     'evidence' => $this->evidenceAvailable($result->toArray()),
+                    'iteration' => $autonomousIterations,
                 ];
             }
+
+            $investigation['autonomous'] = [
+                'enabled' => true,
+                'iterations' => $autonomousIterations,
+                'limit' => $maxAutonomousIterations,
+                'stopped_because' => $autonomousIterations >= $maxAutonomousIterations
+                    ? 'límite de seguridad alcanzado'
+                    : 'no se detectó una necesidad de evidencia adicional',
+            ];
         }
 
         $certainty = $this->determineCertainty($intentName, $toolResults, $errors);
@@ -175,7 +215,19 @@ class NexusRuntime
         $diagnosis = $this->buildDiagnosisReport($request->message, $intentName, $toolResults, $errors, $hypotheses);
         $solution = $this->buildSolutionProposal($request->message, $intentName, $toolResults, $errors, $diagnosis);
         $verification = $diagnosis['verification'] ?? [];
-        $finalMessage = $this->synthesizeRuntimeMessage($request->message, $intentName, $toolResults, $errors, $certainty, $hypotheses, $impact, $behavior, $diagnosis, $solution);
+        $plan = $this->buildTechnicalPlan($request->message, $intentName, $toolResults, $errors);
+        $selfEvaluation = $this->selfEvaluate(
+            $request->message,
+            $intentName,
+            $toolResults,
+            $errors,
+            $hypotheses,
+            $diagnosis,
+            $plan
+        );
+        $correlation = $this->correlateEvidence($request->message, $request->projectId, $toolResults);
+        $explanationStyle = $this->explanationStyle($request->message, $intentName);
+        $finalMessage = $this->synthesizeRuntimeMessage($request->message, $intentName, $toolResults, $errors, $certainty, $hypotheses, $impact, $behavior, $diagnosis, $solution, $plan, $selfEvaluation);
 
         return new NexusRuntimeResponse(
             finalMessage: $finalMessage,
@@ -194,8 +246,135 @@ class NexusRuntime
             diagnosis: $diagnosis,
             solution: $solution,
             verification: $verification,
+            plan: $plan,
+            selfEvaluation: $selfEvaluation,
+            correlation: $correlation,
+            explanationStyle: $explanationStyle,
             status: 'completed',
             source: 'runtime_deterministic',
+        );
+    }
+
+    private function handleAction(NexusRuntimeRequest $request, array $action): NexusRuntimeResponse
+    {
+        if (($action['available'] ?? true) === false) {
+            $message = match ($action['action']) {
+                'security_violation' => 'La solicitud fue rechazada por NexusSecurityBoundary: no se pueden ignorar permisos ni modificar directamente los controles de seguridad.',
+                'unauthorized_tool' => 'La solicitud fue rechazada: la herramienta no está autorizada por Nexus Core.',
+                default => 'La acción git_diff está identificada, pero no está implementada de forma segura en Nexus. No simularé sus resultados.',
+            };
+
+            return new NexusRuntimeResponse(
+                finalMessage: $message,
+                intent: $action['action'],
+                actions: [$action],
+                errors: [$message],
+                status: in_array($action['action'], ['security_violation', 'unauthorized_tool'], true)
+                    ? 'rejected'
+                    : 'unsupported',
+                source: 'runtime_action',
+            );
+        }
+
+        $arguments = $action['arguments'];
+        if ($action['action'] === 'git_commit' && ! isset($arguments['project_id'])) {
+            $project = Proyecto::query()->get()->first(
+                fn (Proyecto $candidate): bool => str_contains(
+                    Str::lower(Str::ascii($candidate->nombre)),
+                    'devcontrol'
+                )
+            );
+            if ($project) {
+                $arguments['project_id'] = $project->id;
+            }
+        }
+        if ($action['action'] === 'git_commit' && ! isset($arguments['project_id'])) {
+            return $this->actionFailure($action, 'Necesito un proyecto activo para preparar el commit.');
+        }
+        $action['arguments'] = $arguments;
+
+        if ($action['action'] === 'code_edit_github') {
+            $required = ['project_id', 'path', 'content'];
+            $missing = array_values(array_filter($required, static fn (string $key): bool => ! array_key_exists($key, $arguments)));
+            if ($missing !== []) {
+                return $this->actionFailure(
+                    $action,
+                    'Detecté una solicitud de edición GitHub, pero faltan datos para ejecutarla: '.implode(', ', $missing).'.'
+                );
+            }
+            $arguments['message'] = 'Actualización solicitada por el usuario';
+        }
+
+        $tool = match ($action['action']) {
+            'git_status' => 'nexus.git.status',
+            'git_commit' => 'nexus.github.local.commit',
+            'test_execution' => 'nexus.code.validate',
+            'code_edit_github' => 'nexus.github.file.write',
+            default => null,
+        };
+
+        if ($tool === null) {
+            return $this->actionFailure($action, 'La acción solicitada no tiene una herramienta disponible.');
+        }
+
+        $permissions = $action['requested_permissions'];
+        $context = new NexusToolContext(
+            user: $request->user,
+            source: 'runtime_action',
+            confirmed: false,
+            system: false,
+            grantedPermissions: in_array('nexus.write', $permissions, true) ? [] : $permissions,
+            projectId: $request->projectId ?? ($request->context['project_id'] ?? null),
+        );
+        $result = $this->tools->execute($tool, $arguments, $context);
+        $toolResult = [[
+            'tool' => $tool,
+            'arguments' => $arguments,
+            'status' => $result->successful ? 'ok' : 'failed',
+            'result' => $result->toArray(),
+        ]];
+
+        if (! $result->successful) {
+            $status = $result->errorCode === 'confirmation_required' ? 'awaiting_confirmation' : 'rejected';
+            $message = $status === 'awaiting_confirmation'
+                ? 'La acción fue preparada y requiere confirmación explícita antes de modificar información.'
+                : ($result->error ?? 'La acción fue rechazada.');
+
+            return new NexusRuntimeResponse(
+                finalMessage: $message,
+                intent: $action['action'],
+                toolsUsed: [$tool],
+                errors: [$result->error ?? 'La herramienta falló.'],
+                actions: [$action],
+                toolResults: $toolResult,
+                status: $status,
+                source: 'runtime_action',
+            );
+        }
+
+        return new NexusRuntimeResponse(
+            finalMessage: $action['action'] === 'test_execution'
+                ? 'Ejecuté la validación solicitada y devolví sus resultados.'
+                : 'La acción solicitada se ejecutó correctamente.',
+            intent: $action['action'],
+            evidence: [$result->data],
+            toolsUsed: [$tool],
+            actions: [$action],
+            toolResults: $toolResult,
+            certainty: 'CONFIRMADO',
+            source: 'runtime_action',
+        );
+    }
+
+    private function actionFailure(array $action, string $message): NexusRuntimeResponse
+    {
+        return new NexusRuntimeResponse(
+            finalMessage: $message,
+            intent: $action['action'],
+            errors: [$message],
+            actions: [$action],
+            status: 'rejected',
+            source: 'runtime_action',
         );
     }
 
@@ -216,7 +395,8 @@ class NexusRuntime
     {
         $text = $this->normalize($message);
 
-        if (preg_match('/\bplanific\w*/iu', $message) === 1) {
+        if (preg_match('/\bplanific\w*/iu', $message) === 1
+            || $this->hasAny($text, ['como implementarías', 'cómo implementarías', 'como implementarias', 'cómo implementar', 'plan tecnico', 'plan técnico', 'que tendria que cambiar', 'qué tendría que cambiar'])) {
             return ['intent' => 'planning', 'confidence' => 0.8];
         }
 
@@ -236,7 +416,11 @@ class NexusRuntime
             return ['intent' => 'behavior_analysis', 'confidence' => 0.9];
         }
 
-        if ($this->hasAny($text, ['como funciona', 'explica', 'describ', 'flujo', 'relaciona', 'relación', 'relaciones', 'funcionalidad de proyectos'])) {
+        if ($this->hasAny($text, ['implementacion de index', 'implementación de index', 'index()', 'explícame la implementación'])) {
+            return ['intent' => 'method_analysis', 'confidence' => 0.9];
+        }
+
+        if ($this->hasAny($text, ['como funciona', 'explica', 'describ', 'flujo', 'relaciona', 'relación', 'relaciones', 'funcionalidad de proyectos', 'que pasa cuando entro a proyectos', 'qué pasa cuando entro a proyectos'])) {
             return ['intent' => 'functionality_flow', 'confidence' => 0.9];
         }
 
@@ -294,7 +478,28 @@ class NexusRuntime
             $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'app/Http/Controllers/ProyectoController.php']];
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'routes/web.php', 'project_id' => $request->projectId]];
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Http/Controllers/ProyectoController.php', 'project_id' => $request->projectId]];
-            $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Models/Proyecto.php', 'project_id' => $request->projectId]];
+            return $plan;
+        }
+
+        if ($intent === 'planning') {
+            $plan[] = ['tool' => 'nexus.project.understand', 'arguments' => [
+                'project_id' => $request->projectId,
+                'path' => '.',
+                'include_documentation' => true,
+            ]];
+            $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'routes/web.php']];
+            if ($this->hasAny($message, ['proyecto', 'proyectos'])) {
+                $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => [
+                    'operation' => 'file',
+                    'path' => 'app/Http/Controllers/ProyectoController.php',
+                    'project_id' => $request->projectId,
+                ]];
+                $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => [
+                    'operation' => 'file',
+                    'path' => 'app/Models/Proyecto.php',
+                    'project_id' => $request->projectId,
+                ]];
+            }
             return $plan;
         }
 
@@ -392,6 +597,43 @@ class NexusRuntime
             && ! in_array('resources/views/admin/proyectos.blade.php', $paths, true);
     }
 
+    /** @return array{tool: string, arguments: array<string, mixed>, question: string}|null */
+    private function nextAutonomousDiagnosisCall(
+        NexusRuntimeRequest $request,
+        array $toolResults,
+        array $investigatedCalls,
+    ): ?array {
+        $paths = $this->evidenceSources($toolResults);
+        $candidates = [
+            [
+                'path' => 'app/Models/Proyecto.php',
+                'question' => '¿Cómo se persisten los datos y qué relaciones intervienen?',
+            ],
+            [
+                'path' => 'resources/views/admin/proyectos.blade.php',
+                'question' => '¿La vista representa los proyectos que devuelve el listado?',
+            ],
+        ];
+
+        foreach ($candidates as $candidate) {
+            $call = [
+                'tool' => 'nexus.github.inspect',
+                'arguments' => [
+                    'operation' => 'file',
+                    'path' => $candidate['path'],
+                    'project_id' => $request->projectId,
+                ],
+                'question' => $candidate['question'],
+            ];
+            $callKey = $call['tool'].'|'.json_encode($call['arguments']);
+            if (! in_array($candidate['path'], $paths, true) && ! in_array($callKey, $investigatedCalls, true)) {
+                return $call;
+            }
+        }
+
+        return null;
+    }
+
     /** @return array<int, array{tool: string, arguments: array<string, mixed>}> */
     private function additionalDiagnosisPlan(NexusRuntimeRequest $request): array
     {
@@ -418,6 +660,8 @@ class NexusRuntime
         array $behavior = [],
         array $diagnosis = [],
         array $solution = [],
+        array $plan = [],
+        array $selfEvaluation = [],
     ): string
     {
         $text = $this->normalize($message);
@@ -427,7 +671,11 @@ class NexusRuntime
         $tareaEvidence = $this->findEvidence($toolResults, 'app/Models/Tarea.php', 'decoded_content');
 
         if ($intent === 'behavior_analysis') {
-            return $this->behaviorNarrative($behavior);
+            return $this->appendSelfEvaluation($this->behaviorNarrative($behavior), $selfEvaluation);
+        }
+
+        if ($intent === 'planning') {
+            return $this->appendSelfEvaluation($this->planNarrative($plan), $selfEvaluation);
         }
 
         if ($this->isProjectRelationQuestion($text)) {
@@ -496,6 +744,21 @@ class NexusRuntime
             return implode(' ', $parts);
         }
 
+        if ($this->isSimpleNavigationQuestion($text)) {
+            $parts = ['Cuando entras a proyectos, DevControl abre el listado de proyectos.'];
+            if ($routeEvidence !== '') {
+                $parts[] = 'La ruta GET /dashboard/proyectos dirige esa entrada al controlador.';
+            }
+            if ($controllerEvidence !== '') {
+                $parts[] = 'El controlador consulta los proyectos recientes y prepara la información que se muestra en pantalla.';
+            }
+            if ($proyectoEvidence !== '') {
+                $parts[] = 'La información se obtiene del modelo Proyecto.';
+            }
+
+            return implode(' ', $parts);
+        }
+
         if ($this->isLifecycleQuestion($text)) {
             $parts = ['Desde la creación hasta la visualización del proyecto, el flujo es: la petición POST /dashboard/proyectos llega a ProyectoController@store.'];
             if ($controllerEvidence !== '') {
@@ -511,7 +774,7 @@ class NexusRuntime
         }
 
         if ($this->isImpactQuestion($text)) {
-            return $this->impactNarrative($impact, $proyectoEvidence, $controllerEvidence);
+            return $this->appendSelfEvaluation($this->impactNarrative($impact, $proyectoEvidence, $controllerEvidence), $selfEvaluation);
         }
 
         if ($this->isMissingFileQuestion($text, $toolResults)) {
@@ -524,7 +787,7 @@ class NexusRuntime
         }
 
         if ($intent === 'diagnosis') {
-            return $this->diagnosisNarrative($diagnosis, $solution);
+            return $this->appendSelfEvaluation($this->diagnosisNarrative($diagnosis, $solution), $selfEvaluation);
         }
 
         if ($intent === 'relation_analysis') {
@@ -588,6 +851,36 @@ class NexusRuntime
         return $this->hasAny($text, ['como funciona actualmente la funcionalidad de proyectos', 'como funciona la funcionalidad de proyectos', 'funcionalidad de proyectos', 'cómo funciona actualmente la funcionalidad de proyectos']);
     }
 
+    private function isSimpleNavigationQuestion(string $text): bool
+    {
+        return $this->hasAny($text, [
+            'que pasa cuando entro a proyectos',
+            'qué pasa cuando entro a proyectos',
+            'cuando entro a proyectos',
+            'al entrar a proyectos',
+        ]);
+    }
+
+    private function explanationStyle(string $message, string $intent): string
+    {
+        $text = $this->normalize($message);
+
+        if ($intent === 'diagnosis') {
+            return 'diagnostic';
+        }
+        if ($intent === 'planning' || $this->hasAny($text, ['que tendria que cambiar', 'qué tendría que cambiar'])) {
+            return 'proposal';
+        }
+        if ($this->isSimpleNavigationQuestion($text)) {
+            return 'simple';
+        }
+        if ($intent === 'method_analysis' || $this->hasAny($text, ['implementacion de index', 'implementación de index', 'index()'])) {
+            return 'technical';
+        }
+
+        return 'general';
+    }
+
     private function isBehaviorQuestion(string $text): bool
     {
         return $this->hasAny($text, [
@@ -643,6 +936,92 @@ class NexusRuntime
             'app/Models/Proyecto.php',
             'resources/views/admin/proyectos.blade.php',
         ]);
+    }
+
+    /** @return array<string, mixed> */
+    private function selfEvaluate(
+        string $message,
+        string $intent,
+        array $toolResults,
+        array $errors,
+        array $hypotheses,
+        array $diagnosis,
+        array $plan,
+    ): array {
+        $sources = $this->evidenceSources($toolResults);
+        $hasEvidence = $sources !== [] || $toolResults !== [];
+        $contradictions = collect($hypotheses)
+            ->flatMap(fn (array $hypothesis): array => (array) ($hypothesis['contradicting_evidence'] ?? []))
+            ->filter()
+            ->values()
+            ->all();
+        $inferences = collect($hypotheses)
+            ->filter(fn (array $hypothesis): bool => data_get($hypothesis, 'verification.inference') === true)
+            ->pluck('description')
+            ->values()
+            ->all();
+        $missing = array_values(array_unique(array_merge(
+            $errors !== [] ? ['resultados de herramientas con error'] : [],
+            (array) ($diagnosis['missing_evidence'] ?? []),
+            (array) ($plan['missing_information'] ?? [])
+        )));
+        $checks = [
+            'answered_question' => trim($message) !== '' && $intent !== 'general',
+            'used_evidence' => $hasEvidence,
+            'evidence_belongs_to_query' => $this->evidenceMatchesQuery($message, $sources),
+            'separates_inference_from_fact' => $inferences === [] || $intent === 'planning' || $diagnosis !== [],
+            'alternative_hypotheses' => $intent !== 'diagnosis' || count($hypotheses) > 1,
+            'contradictory_evidence_reviewed' => $contradictions === [] || $intent === 'diagnosis',
+            'necessary_investigation_complete' => $missing === [],
+            'conclusion_supported' => $hasEvidence && $errors === [] && $missing === [],
+        ];
+        $failed = array_keys(array_filter($checks, fn (bool $passed): bool => ! $passed));
+        $requiresAdditional = $failed !== [] || ($intent === 'diagnosis' && ($diagnosis['certainty'] ?? '') === 'evidencia insuficiente');
+
+        return [
+            'status' => $requiresAdditional ? 'requiere investigación adicional' : 'suficientemente respaldada',
+            'requires_additional_investigation' => $requiresAdditional,
+            'checks' => $checks,
+            'failed_checks' => $failed,
+            'evidence_sources' => $sources,
+            'inferences' => $inferences,
+            'contradictions' => $contradictions,
+            'missing_information' => $missing,
+            'conclusion' => $requiresAdditional
+                ? 'La respuesta no debe presentarse como concluyente con la evidencia disponible.'
+                : 'La conclusión está respaldada por la evidencia recopilada para esta consulta.',
+        ];
+    }
+
+    private function evidenceMatchesQuery(string $message, array $sources): bool
+    {
+        if ($sources === []) {
+            return false;
+        }
+
+        $text = $this->normalize($message);
+        if ($this->hasAny($text, ['proyecto', 'proyectos'])) {
+            return collect($sources)->contains(fn (string $source): bool =>
+                str_contains($source, 'Proyecto')
+                || str_contains($source, 'proyecto')
+                || str_contains($source, 'routes')
+            );
+        }
+
+        return true;
+    }
+
+    private function appendSelfEvaluation(string $narrative, array $evaluation): string
+    {
+        if ($evaluation === []) {
+            return $narrative;
+        }
+
+        if (($evaluation['requires_additional_investigation'] ?? false) === true) {
+            return $narrative.' Autoevaluación: requiere investigación adicional. '.($evaluation['conclusion'] ?? '');
+        }
+
+        return $narrative.' Autoevaluación: la conclusión está suficientemente respaldada por la evidencia recopilada.';
     }
 
     /** @return array<string, mixed> */
@@ -1212,6 +1591,109 @@ class NexusRuntime
             ->all();
     }
 
+    /** @return array<string, mixed> */
+    private function correlateEvidence(string $message, ?int $projectId, array $toolResults): array
+    {
+        $records = collect($toolResults)
+            ->map(function (array $entry): ?array {
+                $path = data_get($entry, 'result.data.path')
+                    ?: data_get($entry, 'result.data.resource.path')
+                    ?: data_get($entry, 'arguments.path');
+                if (! is_string($path) || $path === '') {
+                    return null;
+                }
+
+                return [
+                    'domain' => $this->evidenceDomain($path, (string) ($entry['tool'] ?? '')),
+                    'path' => $path,
+                    'tool' => $entry['tool'] ?? null,
+                    'project_id' => data_get($entry, 'arguments.project_id'),
+                    'status' => $entry['status'] ?? 'unknown',
+                ];
+            })
+            ->filter()
+            ->unique(fn (array $record): string => $record['domain'].'|'.$record['path'].'|'.($record['project_id'] ?? ''))
+            ->values()
+            ->all();
+
+        $records = array_values(array_filter($records, fn (array $record): bool =>
+            $projectId === null || $record['project_id'] === null || (int) $record['project_id'] === $projectId
+        ));
+        $domains = array_values(array_unique(array_column($records, 'domain')));
+        $allowedLinks = [
+            'route' => ['controller'],
+            'controller' => ['model', 'service', 'view'],
+            'model' => ['migration', 'database'],
+            'migration' => ['database'],
+            'config' => ['service', 'controller'],
+            'log' => ['route', 'controller', 'model'],
+            'git' => ['github'],
+            'github' => ['controller', 'model'],
+            'test' => ['controller', 'service', 'model'],
+        ];
+        $links = [];
+        foreach ($records as $from) {
+            foreach ($records as $to) {
+                if ($from['domain'] === $to['domain'] || ! in_array($to['domain'], $allowedLinks[$from['domain']] ?? [], true)) {
+                    continue;
+                }
+                $links[] = [
+                    'from' => $from['domain'],
+                    'to' => $to['domain'],
+                    'evidence' => [$from['path'], $to['path']],
+                    'certainty' => 'direct',
+                ];
+            }
+        }
+
+        return [
+            'query' => $message,
+            'project_id' => $projectId,
+            'domains' => $domains,
+            'evidence' => $records,
+            'links' => array_values(array_unique($links, SORT_REGULAR)),
+            'isolated' => true,
+            'unmatched_domains' => array_values(array_diff(
+                ['code', 'route', 'controller', 'model', 'migration', 'database', 'config', 'log', 'git', 'github', 'memory', 'execution', 'test'],
+                $domains
+            )),
+        ];
+    }
+
+    private function evidenceDomain(string $path, string $tool): string
+    {
+        $normalized = strtolower($path);
+        if (str_contains($normalized, 'routes/')) {
+            return 'route';
+        }
+        if (str_contains($normalized, 'controller')) {
+            return 'controller';
+        }
+        if (str_contains($normalized, 'model')) {
+            return 'model';
+        }
+        if (str_contains($normalized, 'migration')) {
+            return 'migration';
+        }
+        if (str_contains($normalized, 'config/')) {
+            return 'config';
+        }
+        if (str_contains($normalized, 'log')) {
+            return 'log';
+        }
+        if (str_contains($normalized, 'test')) {
+            return 'test';
+        }
+        if (str_contains(strtolower($tool), 'github')) {
+            return 'github';
+        }
+        if (str_contains($normalized, 'database') || str_contains($normalized, 'schema')) {
+            return 'database';
+        }
+
+        return 'code';
+    }
+
     private function redirectTarget(string $content): string
     {
         if (preg_match("/redirect\\(\\)->route\\(['\"]([^'\"]+)['\"]/", $content, $matches) === 1) {
@@ -1397,6 +1879,118 @@ class NexusRuntime
         $parts[] = 'Diagnóstico final: '.$diagnosis['certainty'].'.';
         if ($solution !== []) {
             $parts[] = $this->solutionNarrative($solution);
+        }
+
+        return implode(' ', $parts);
+    }
+
+    /** @return array<string, mixed> */
+    private function buildTechnicalPlan(string $message, string $intent, array $toolResults, array $errors): array
+    {
+        if ($intent !== 'planning') {
+            return [];
+        }
+
+        $architecture = $this->findStructuredEvidence($toolResults, 'architecture_map');
+        $sources = $this->evidenceSources($toolResults);
+        $components = collect($architecture['components'] ?? [])
+            ->flatMap(fn (array $component): array => (array) ($component['files'] ?? []))
+            ->filter(fn ($path): bool => is_string($path) && $path !== '')
+            ->values()
+            ->all();
+        $affected = array_values(array_unique(array_merge($sources, $components)));
+        $missing = $errors !== [] ? ['resultados de herramientas que fallaron'] : [];
+        $objective = trim($message);
+        $steps = [
+            [
+                'order' => 1,
+                'action' => 'Definir el contrato y el comportamiento esperado de '.$objective,
+                'status' => 'proposed',
+                'dependencies' => [],
+                'verification' => 'Criterios de aceptación escritos antes de modificar código.',
+            ],
+            [
+                'order' => 2,
+                'action' => 'Implementar el cambio en los componentes afectados identificados por la investigación.',
+                'status' => 'proposed',
+                'dependencies' => [1],
+                'verification' => 'Pruebas focalizadas del flujo afectado.',
+            ],
+            [
+                'order' => 3,
+                'action' => 'Validar integración, regresiones y seguridad.',
+                'status' => 'proposed',
+                'dependencies' => [2],
+                'verification' => 'Suite completa y comprobación de permisos.',
+            ],
+        ];
+        $confirmedState = [
+            'sources' => $sources,
+            'components' => array_values(array_unique($affected)),
+            'architecture' => $architecture,
+            'certainty' => $missing === [] && $sources !== [] ? 'CONFIRMADO' : 'INSUFICIENTE',
+        ];
+
+        return [
+            'objective' => $objective,
+            'current_state' => $confirmedState,
+            'affected_components' => $affected,
+            'dependencies' => $this->planDependencies($architecture),
+            'steps' => $steps,
+            'risks' => [
+                'El plan propone cambios futuros y no demuestra que sean necesarios hasta implementarlos.',
+                'Las capas no inspeccionadas pueden introducir dependencias adicionales.',
+                'Cambios en rutas, persistencia o permisos pueden producir regresiones.',
+            ],
+            'tests' => [
+                'Pruebas unitarias del componente modificado.',
+                'Prueba del flujo completo descrito por el objetivo.',
+                'Suite completa y validación de seguridad.',
+            ],
+            'acceptance_criteria' => [
+                'El comportamiento solicitado funciona con evidencia observable.',
+                'Las pruebas focalizadas y la suite completa pasan.',
+                'No se modifican permisos ni se ejecutan cambios fuera de las capas autorizadas.',
+            ],
+            'missing_information' => $missing,
+            'read_only' => true,
+            'status' => 'proposed',
+        ];
+    }
+
+    /** @return array<int, string> */
+    private function planDependencies(array $architecture): array
+    {
+        $dependencies = [];
+        foreach ($architecture['edges'] ?? [] as $edge) {
+            $from = (string) ($edge['from'] ?? '');
+            $to = (string) ($edge['to'] ?? '');
+            if ($from !== '' && $to !== '') {
+                $dependencies[] = $from.' → '.$to.' ('.($edge['certainty'] ?? 'unknown').')';
+            }
+        }
+
+        return array_values(array_unique($dependencies));
+    }
+
+    private function planNarrative(array $plan): string
+    {
+        if ($plan === []) {
+            return 'No se pudo construir un plan técnico porque falta evidencia del proyecto.';
+        }
+
+        $parts = [
+            'Plan técnico propuesto (no es estado actual): '.$plan['objective'],
+            'Estado actual confirmado: '.$plan['current_state']['certainty'].'.',
+            'Componentes afectados: '.implode(', ', $plan['affected_components'] ?: ['ninguno confirmado']).'.',
+        ];
+        foreach ($plan['steps'] as $step) {
+            $parts[] = $step['order'].'. '.$step['action'].' Verificación: '.$step['verification'];
+        }
+        $parts[] = 'Riesgos: '.implode(' ', $plan['risks']);
+        $parts[] = 'Criterios de aceptación: '.implode(' ', $plan['acceptance_criteria']);
+        if ($plan['missing_information'] !== []) {
+            $parts[] = 'Información faltante: '.implode(', ', $plan['missing_information']).'.';
         }
 
         return implode(' ', $parts);

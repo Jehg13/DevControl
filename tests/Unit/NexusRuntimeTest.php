@@ -27,6 +27,104 @@ class NexusRuntimeTest extends TestCase
         $this->assertStringContainsString('DevControl', $response->finalMessage);
     }
 
+    public function test_explains_the_same_project_evidence_in_simple_language_when_entering_projects(): void
+    {
+        $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(
+            message: '¿Qué pasa cuando entro a proyectos?',
+            projectId: 1,
+        ));
+
+        $this->assertSame('functionality_flow', $response->intent);
+        $this->assertSame('simple', $response->explanationStyle);
+        $this->assertStringContainsString('Cuando entras a proyectos', $response->finalMessage);
+        $this->assertStringContainsString('/dashboard/proyectos', $response->finalMessage);
+        $this->assertStringNotContainsString('Proyecto::latest()->paginate(2)', $response->finalMessage);
+    }
+
+    public function test_adaptive_explanation_profiles_match_technical_diagnostic_and_proposal_intents(): void
+    {
+        $runtime = app(NexusRuntime::class);
+        $method = new ReflectionMethod($runtime, 'explanationStyle');
+        $method->setAccessible(true);
+
+        $this->assertSame('technical', $method->invoke($runtime, 'Explícame la implementación de index().', 'method_analysis'));
+        $this->assertSame('diagnostic', $method->invoke($runtime, '¿Por qué no aparecen los proyectos?', 'diagnosis'));
+        $this->assertSame('proposal', $method->invoke($runtime, '¿Qué tendría que cambiar para exportar proyectos?', 'planning'));
+    }
+
+    public function test_planning_question_investigates_before_returning_evidence_based_plan(): void
+    {
+        $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(
+            message: '¿Cómo implementarías una exportación de proyectos?',
+            projectId: 1,
+        ));
+
+        $this->assertSame('planning', $response->intent);
+        $this->assertNotEmpty($response->toolsUsed);
+        $this->assertNotEmpty($response->plan);
+        $this->assertTrue($response->plan['read_only']);
+        $this->assertSame('proposed', $response->plan['status']);
+        $this->assertArrayHasKey('objective', $response->plan);
+        $this->assertArrayHasKey('current_state', $response->plan);
+        $this->assertArrayHasKey('affected_components', $response->plan);
+        $this->assertArrayHasKey('dependencies', $response->plan);
+        $this->assertArrayHasKey('steps', $response->plan);
+        $this->assertArrayHasKey('risks', $response->plan);
+        $this->assertArrayHasKey('tests', $response->plan);
+        $this->assertArrayHasKey('acceptance_criteria', $response->plan);
+        $this->assertStringContainsString('Plan técnico propuesto', $response->finalMessage);
+        $this->assertStringContainsString('no es estado actual', $response->finalMessage);
+    }
+
+    public function test_plan_with_missing_investigation_evidence_is_not_presented_as_confirmed(): void
+    {
+        $runtime = app(NexusRuntime::class);
+        $method = new ReflectionMethod($runtime, 'buildTechnicalPlan');
+        $method->setAccessible(true);
+
+        $plan = $method->invoke($runtime, '¿Cómo implementarías autenticación?', 'planning', [], ['tool failed']);
+
+        $this->assertSame('INSUFICIENTE', $plan['current_state']['certainty']);
+        $this->assertSame('proposed', $plan['status']);
+        $this->assertTrue($plan['read_only']);
+        $this->assertNotEmpty($plan['missing_information']);
+        $this->assertNotEmpty($plan['risks']);
+    }
+
+    public function test_self_evaluation_marks_insufficient_investigation_and_changes_final_conclusion(): void
+    {
+        $runtime = app(NexusRuntime::class);
+        $method = new ReflectionMethod($runtime, 'selfEvaluate');
+        $method->setAccessible(true);
+
+        $evaluation = $method->invoke(
+            $runtime,
+            'Los proyectos no aparecen.',
+            'diagnosis',
+            [],
+            ['No se pudo leer el controller.'],
+            [],
+            [
+                'certainty' => 'evidencia insuficiente',
+                'missing_evidence' => ['flujo de consulta'],
+            ],
+            []
+        );
+
+        $this->assertTrue($evaluation['requires_additional_investigation']);
+        $this->assertSame('requiere investigación adicional', $evaluation['status']);
+        $this->assertNotEmpty($evaluation['failed_checks']);
+        $this->assertContains('used_evidence', $evaluation['failed_checks']);
+        $this->assertStringContainsString(
+            'requiere investigación adicional',
+            (new ReflectionMethod($runtime, 'appendSelfEvaluation'))->invoke(
+                $runtime,
+                'Diagnóstico provisional.',
+                $evaluation
+            )
+        );
+    }
+
     public function test_diagnostic_query_is_classified_as_diagnosis_and_uses_registry_tools(): void
     {
         $runtime = app(NexusRuntime::class);
@@ -60,6 +158,60 @@ class NexusRuntimeTest extends TestCase
         $this->assertNotSame([], $response->toolResults);
         $this->assertStringContainsString('Diagnóstico', $response->finalMessage);
         $this->assertStringNotContainsString('He revisado la comprensión del proyecto', $response->finalMessage);
+    }
+
+    public function test_diagnosis_performs_chained_autonomous_investigation_until_required_layers_are_found(): void
+    {
+        $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(
+            message: 'Los proyectos no aparecen después de crearlos. Investiga por qué.',
+            projectId: 1,
+        ));
+
+        $this->assertTrue($response->investigation['autonomous']['enabled']);
+        $this->assertGreaterThanOrEqual(2, $response->investigation['autonomous']['iterations']);
+        $this->assertLessThanOrEqual($response->investigation['autonomous']['limit'], $response->investigation['autonomous']['iterations']);
+        $paths = collect($response->toolResults)->map(fn (array $entry): string => (string) data_get($entry, 'result.data.path'))->filter()->all();
+        $this->assertContains('app/Models/Proyecto.php', $paths);
+        $this->assertContains('resources/views/admin/proyectos.blade.php', $paths);
+        $this->assertSame([], array_values(array_diff(
+            collect($paths)->duplicates()->values()->all(),
+            ['routes/web.php', 'app/Http/Controllers/ProyectoController.php']
+        )));
+    }
+
+    public function test_correlates_current_query_domains_into_direct_evidence_links(): void
+    {
+        $runtime = app(NexusRuntime::class);
+        $method = new ReflectionMethod($runtime, 'correlateEvidence');
+        $method->setAccessible(true);
+
+        $correlation = $method->invoke($runtime, 'Los proyectos no aparecen.', 1, [
+            ['tool' => 'nexus.github.inspect', 'arguments' => ['path' => 'routes/web.php', 'project_id' => 1], 'status' => 'ok', 'result' => ['data' => ['path' => 'routes/web.php']]],
+            ['tool' => 'nexus.github.inspect', 'arguments' => ['path' => 'app/Http/Controllers/ProyectoController.php', 'project_id' => 1], 'status' => 'ok', 'result' => ['data' => ['path' => 'app/Http/Controllers/ProyectoController.php']]],
+            ['tool' => 'nexus.github.inspect', 'arguments' => ['path' => 'app/Models/Proyecto.php', 'project_id' => 1], 'status' => 'ok', 'result' => ['data' => ['path' => 'app/Models/Proyecto.php']]],
+        ]);
+
+        $this->assertSame(['route', 'controller', 'model'], $correlation['domains']);
+        $this->assertTrue($correlation['isolated']);
+        $this->assertNotEmpty($correlation['links']);
+        $this->assertContains('controller', array_column($correlation['links'], 'to'));
+        $this->assertContains('model', array_column($correlation['links'], 'to'));
+    }
+
+    public function test_correlation_excludes_evidence_from_another_project(): void
+    {
+        $runtime = app(NexusRuntime::class);
+        $method = new ReflectionMethod($runtime, 'correlateEvidence');
+        $method->setAccessible(true);
+
+        $correlation = $method->invoke($runtime, '¿Cómo funciona el proyecto?', 1, [
+            ['tool' => 'nexus.github.inspect', 'arguments' => ['path' => 'routes/web.php', 'project_id' => 1], 'status' => 'ok', 'result' => ['data' => ['path' => 'routes/web.php']]],
+            ['tool' => 'nexus.github.inspect', 'arguments' => ['path' => 'app/Models/Otro.php', 'project_id' => 2], 'status' => 'ok', 'result' => ['data' => ['path' => 'app/Models/Otro.php']]],
+        ]);
+
+        $this->assertSame(['route'], $correlation['domains']);
+        $this->assertNotContains('app/Models/Otro.php', array_column($correlation['evidence'], 'path'));
+        $this->assertSame(1, $correlation['project_id']);
     }
 
     public function test_diagnostic_response_contains_structured_hypotheses_with_evidence_and_status(): void

@@ -225,7 +225,8 @@ class AsistenteController extends Controller
                 $response = $this->processInstruction(
                     $validated['message'],
                     $messages,
-                    $request->session()->get('assistant_pending_action')
+                    $request->session()->get('assistant_pending_action'),
+                    $request->user()
                 );
             }
         } catch (\Throwable $exception) {
@@ -364,7 +365,7 @@ class AsistenteController extends Controller
         ));
 
         if ($runtimeResult->status === 'awaiting_confirmation') {
-            return [
+            $response = [
                 'message' => ['role' => 'assistant', 'content' => $runtimeResult->finalMessage],
                 'navigation' => $runtimeResult->navigation,
                 'reasoning' => $runtimeResult->toArray(),
@@ -374,6 +375,12 @@ class AsistenteController extends Controller
                     'tools_used' => $runtimeResult->toolsUsed,
                 ],
             ];
+            $pendingAction = $this->pendingActionFromRuntime($runtimeResult);
+            if ($pendingAction !== null) {
+                $response['pending_action'] = $pendingAction;
+            }
+
+            return $response;
         }
 
         if ($runtimeResult->source !== 'runtime_general' || $runtimeResult->toolsUsed !== []) {
@@ -399,6 +406,23 @@ class AsistenteController extends Controller
             $context,
             $tools
         );
+    }
+
+    private function pendingActionFromRuntime(\App\Nexus\NexusRuntimeResponse $response): ?array
+    {
+        $action = $response->actions[0] ?? null;
+        if (! is_array($action) || ($action['action'] ?? null) !== 'git_commit') {
+            return null;
+        }
+
+        return [
+            'type' => 'github_local_commit',
+            'project_id' => $action['arguments']['project_id'] ?? null,
+            'data' => [
+                'mensaje' => $action['arguments']['message'] ?? 'Cambios actuales',
+                'rama' => $action['arguments']['branch'] ?? null,
+            ],
+        ];
     }
 
     private function requiresRepositoryEvidence(string $input): bool
@@ -1692,12 +1716,12 @@ class AsistenteController extends Controller
         return response()->json(['ok' => true]);
     }
 
-    private function processInstruction(string $input, array $history = [], ?array $pendingAction = null): array
+    private function processInstruction(string $input, array $history = [], ?array $pendingAction = null, ?User $user = null): array
     {
         $text = $this->normalizeInstruction($input);
 
         if ($pendingAction) {
-            $confirmation = $this->resolvePendingAction($text, $pendingAction);
+            $confirmation = $this->resolvePendingAction($text, $pendingAction, $user);
 
             if ($confirmation) {
                 return $confirmation;
@@ -3020,7 +3044,7 @@ class AsistenteController extends Controller
         ];
     }
 
-    private function resolvePendingAction(string $text, array $action): ?array
+    private function resolvePendingAction(string $text, array $action, ?User $user = null): ?array
     {
         if ($this->hasApproximateTerm($text, ['cancela', 'cancelar', 'no', 'detener'])) {
             return $this->assistantResponse('Operación cancelada. No se modificó ningún registro.', null);
@@ -3035,18 +3059,19 @@ class AsistenteController extends Controller
         if ($action['type'] === 'github_commit') {
             $project = Proyecto::findOrFail($action['project_id']);
 
-            try {
-                app(ProyectoController::class)->crearCommitGithubConDatos($project, $action['data']);
-            } catch (ConnectionException $exception) {
-                return $this->assistantResponse(
-                    'No se pudo conectar con GitHub para crear el commit. Revisa la conexión y vuelve a intentarlo.'
-                );
-            } catch (RequestException $exception) {
-                return $this->assistantResponse(
-                    $exception->response?->json('message')
-                        ? "GitHub rechazó el commit: {$exception->response->json('message')}"
-                        : 'GitHub rechazó el commit. Revisa el token y sus permisos de escritura.'
-                );
+            $result = app(NexusToolRegistry::class)->execute(
+                'nexus.github.file.write',
+                [
+                    'project_id' => $project->id,
+                    'path' => $action['data']['ruta'],
+                    'content' => $action['data']['contenido'],
+                    'message' => $action['data']['mensaje'],
+                    'branch' => $action['data']['rama'] ?? null,
+                ],
+                new NexusToolContext($user, 'assistant', true, false, [], null, $project->id)
+            );
+            if (! $result->successful) {
+                return $this->assistantResponse('GitHub rechazó el commit: '.($result->error ?? 'operación no autorizada').'.');
             }
 
             return $this->assistantResponse(
@@ -3057,29 +3082,22 @@ class AsistenteController extends Controller
         if ($action['type'] === 'github_local_commit') {
             $project = Proyecto::findOrFail($action['project_id']);
 
-            try {
-                $result = app(ProyectoController::class)
-                    ->crearCommitGithubDesdeCambiosLocales($project, $action['data']);
-            } catch (ConnectionException $exception) {
-                return $this->assistantResponse(
-                    'No se pudo conectar con GitHub para publicar los cambios locales.'
-                );
-            } catch (RequestException $exception) {
-                $status = $exception->response?->status();
-                $detail = $exception->response?->json('message');
-
-                return $this->assistantResponse(
-                    $detail
-                        ? "GitHub rechazó la publicación".($status ? " (HTTP {$status})" : '').": {$detail}"
-                        : 'GitHub rechazó la publicación. Revisa el token y sus permisos de escritura.'
-                );
-            } catch (\RuntimeException $exception) {
-                return $this->assistantResponse("No se pudo preparar la publicación: {$exception->getMessage()}");
+            $result = app(NexusToolRegistry::class)->execute(
+                'nexus.github.local.commit',
+                [
+                    'project_id' => $project->id,
+                    'message' => $action['data']['mensaje'] ?? 'Cambios actuales',
+                    'branch' => $action['data']['rama'] ?? null,
+                ],
+                new NexusToolContext($user, 'assistant', true, false, [], null, $project->id)
+            );
+            if (! $result->successful) {
+                return $this->assistantResponse('No se pudo publicar el commit: '.($result->error ?? 'operación no autorizada').'.');
             }
 
             return $this->assistantResponse(
-                "Listo. Publiqué ".count($result['files'])." archivos de \"{$project->nombre}\" ".
-                "en un commit de la rama {$result['branch']}."
+                "Listo. Publiqué ".count($result->data['files'] ?? [])." archivos de \"{$project->nombre}\" ".
+                "en un commit de la rama ".($result->data['branch'] ?? 'la rama configurada').'.'
             );
         }
 
