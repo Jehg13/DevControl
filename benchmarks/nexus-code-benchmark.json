@@ -1,0 +1,12 @@
+[
+  {"id":"php-complete-001","language":"PHP","task":"complete_code","prompt":"Complete PHP function: function add(int $a, int $b): int {","expected_contains":["return"]},
+  {"id":"laravel-api-001","language":"Laravel","task":"api","prompt":"Laravel API route should use Route::get('/users',","expected_contains":["UserController"]},
+  {"id":"dart-complete-001","language":"Dart","task":"complete_code","prompt":"Dart declaration: final List<String> names =","expected_contains":["["]},
+  {"id":"flutter-widget-001","language":"Flutter","task":"complete_code","prompt":"Flutter widget class HomePage extends","expected_contains":["Widget"]},
+  {"id":"sql-query-001","language":"SQL","task":"database","prompt":"SQL query to select active users:","expected_contains":["select","from"]},
+  {"id":"javascript-error-001","language":"JavaScript","task":"find_error","prompt":"Find the issue in: const value = user.name;","expected_contains":["undefined"]},
+  {"id":"typescript-type-001","language":"TypeScript","task":"explain_code","prompt":"TypeScript interface User {","expected_contains":["string"]},
+  {"id":"html-css-001","language":"HTML/CSS","task":"complete_code","prompt":"HTML element with a stylesheet: <link","expected_contains":["stylesheet"]},
+  {"id":"shell-command-001","language":"Bash/PowerShell","task":"terminal","prompt":"Bash command to list PHP files:","expected_contains":["find"]},
+  {"id":"git-command-001","language":"Git","task":"dependencies","prompt":"Git command to show recent commits:","expected_contains":["git","log"]}
+]

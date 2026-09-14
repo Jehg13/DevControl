@@ -1,0 +1,36 @@
+[
+  {
+    "id": "full-chain-001",
+    "prompt": "La API falla tras un cambio. Hay un log 500 y un commit reciente. Razonar paso a paso.",
+    "expected": {
+      "objective": ["objective", "api"],
+      "available_information": ["available", "log"],
+      "missing_information": ["missing"],
+      "hypotheses": ["hypothesis"],
+      "hypothesis_evaluation": ["confidence", "evidence"],
+      "strategy": ["strategy"],
+      "actions": ["action"],
+      "expected_results": ["expected"],
+      "validation": ["validation", "test"]
+    },
+    "uncertainty_terms": ["uncertain", "confidence", "unknown"],
+    "forbidden_as_fact": ["definitely", "proven"]
+  },
+  {
+    "id": "missing-001",
+    "prompt": "Determina la causa de una caída sin logs, cambios, métricas ni pasos de reproducción.",
+    "expected": {
+      "objective": ["cause"],
+      "available_information": ["available"],
+      "missing_information": ["missing", "logs"],
+      "hypotheses": ["hypothesis"],
+      "hypothesis_evaluation": ["unknown", "confidence"],
+      "strategy": ["investigate"],
+      "actions": ["collect"],
+      "expected_results": ["expected"],
+      "validation": ["validate"]
+    },
+    "uncertainty_terms": ["insufficient", "unknown", "uncertain"],
+    "forbidden_as_fact": ["definitely", "the cause is"]
+  }
+]
