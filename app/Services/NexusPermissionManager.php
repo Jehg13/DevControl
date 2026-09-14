@@ -20,10 +20,19 @@ class NexusPermissionManager
     ): int {
         $permissions = array_values(array_unique(array_filter($permissions, 'is_string')));
         $risk = $this->risk($toolName, $permissions);
+
+        $projectId = $context->projectId ?? $parameters['project_id'] ?? $parameters['proyecto_id'] ?? null;
+        if (is_int($projectId) || ctype_digit((string) $projectId)) {
+            $projectExists = \App\Models\Proyecto::whereKey((int) $projectId)->exists();
+            $projectId = $projectExists ? (int) $projectId : null;
+        } else {
+            $projectId = null;
+        }
+
         $audit = NexusPermissionAudit::create([
             'nexus_run_id' => $context->runId,
             'usuario_id' => $context->user?->id,
-            'proyecto_id' => $context->projectId ?? $parameters['project_id'] ?? $parameters['proyecto_id'] ?? null,
+            'proyecto_id' => $projectId,
             'tool_name' => $toolName,
             'action' => $toolName,
             'risk_level' => $risk,

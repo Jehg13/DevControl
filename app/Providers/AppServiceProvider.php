@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Contracts\NexusModel;
+use App\Nexus\NexusRuntime as CoreNexusRuntime;
 use App\Nexus\NexusToolRegistry;
 use App\Nexus\Tools\AuditApplyProposalTool;
 use App\Nexus\Tools\AuditFindingsTool;
@@ -38,6 +39,7 @@ use App\Nexus\Tools\TaskListTool;
 use App\Nexus\Tools\TaskUpdateTool;
 use App\Services\Models\OpenAICompatibleNexusModel;
 use App\Services\Models\UnavailableNexusModel;
+use App\Services\Models\LocalNexusModel;
 use App\Services\NexusInferenceEngine;
 use Illuminate\Support\ServiceProvider;
 
@@ -52,6 +54,7 @@ class AppServiceProvider extends ServiceProvider
             $adapter = match (config('nexus.ai.driver')) {
                 'none' => $app->make(UnavailableNexusModel::class),
                 'openai_compatible' => $app->make(OpenAICompatibleNexusModel::class),
+                'local' => $app->make(LocalNexusModel::class),
                 default => throw new \RuntimeException(
                     'El proveedor de Nexus configurado no está soportado: '.config('nexus.ai.driver')
                 ),
@@ -95,6 +98,15 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(BugUpdateTool::class),
                 $app->make(BugDeleteTool::class),
             ]);
+        });
+
+        $this->app->singleton(CoreNexusRuntime::class, function ($app): CoreNexusRuntime {
+            return new CoreNexusRuntime(
+                $app->make(NexusToolRegistry::class),
+                $app->bound(\App\Services\NexusExecutionService::class)
+                    ? $app->make(\App\Services\NexusExecutionService::class)
+                    : null,
+            );
         });
     }
 

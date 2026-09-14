@@ -49,7 +49,7 @@ final class NexusDatasetService
     public function export(array $filters = []): string
     {
         $query = NexusDatasetExample::query()
-            ->where('status', 'active')
+            ->where('status', 'approved')
             ->when($filters['split'] ?? null, fn ($q, $split) => $q->where('split', $split))
             ->when($filters['version'] ?? null, fn ($q, $version) => $q->where('version', $version))
             ->when($filters['minimum_quality'] ?? null, fn ($q, $score) => $q->where('quality_score', '>=', $score));
@@ -198,7 +198,7 @@ final class NexusDatasetService
             'payload' => $payload,
             'labels' => $labels,
             'quality_score' => $quality,
-            'status' => 'active',
+            'status' => 'quarantined',
             'source_type' => $candidate['source_type'],
             'source_id' => $candidate['source_id'] ?? null,
             'proyecto_id' => $candidate['project_id'] ?? null,

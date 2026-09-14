@@ -53,6 +53,7 @@ Route::post('/logout', function (Request $request) {
 Route::middleware(['auth', 'role:admin'])->group(function () {
 Route::get('/dashboard/asistente', [AsistenteController::class, 'index'])->name('asistente.index');
 Route::post('/dashboard/asistente/mensaje', [AsistenteController::class, 'message'])->name('asistente.message');
+Route::get('/dashboard/asistente/progreso', [AsistenteController::class, 'researchProgress'])->name('asistente.progress');
 Route::get('/dashboard/asistente/herramientas', [NexusController::class, 'definitions'])->name('nexus.tools');
 Route::post('/dashboard/asistente/razonar', [NexusController::class, 'reason'])->name('nexus.reason');
 Route::post('/dashboard/asistente/ejecutar', [NexusController::class, 'execute'])->name('nexus.execute');
@@ -85,6 +86,7 @@ Route::get('/dashboard/proyectos/{proyecto}', [ProyectoController::class, 'show'
 Route::post('/dashboard/proyectos/{proyecto}/github/sincronizar', [ProyectoController::class, 'sincronizarGithub'])->name('proyectos.github.sync');
 Route::post('/dashboard/proyectos/{proyecto}/github/manual', [ProyectoController::class, 'configurarGithubManual'])->name('proyectos.github.manual');
 Route::post('/dashboard/proyectos/{proyecto}/github/analizar', [ProyectoController::class, 'analizarGithub'])->name('proyectos.github.analyze');
+Route::get('/dashboard/proyectos/{proyecto}/github/analizar/estado', [ProyectoController::class, 'estadoAnalisisGithub'])->name('proyectos.github.analyze.status');
 Route::post('/dashboard/proyectos/{proyecto}/github/importar', [ProyectoController::class, 'importarGithub'])->name('proyectos.github.import');
 Route::post('/dashboard/proyectos/{proyecto}/github/commit', [ProyectoController::class, 'crearCommitGithub'])->name('proyectos.github.commit');
 Route::resource('/dashboard/tareas', TareasController::class);

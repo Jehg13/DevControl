@@ -47,6 +47,13 @@
                         </div>
                     @endforeach
                 </div>
+                <div id="researchProgress" class="hidden border-t border-white/10 bg-black/20 px-5 py-4" aria-live="polite">
+                    <div class="flex items-center justify-between">
+                        <p id="researchProgressMessage" class="font-mono2 text-[10px] text-gray-400">Preparando investigación...</p>
+                        <span id="researchProgressPercent" class="font-mono2 text-[10px] text-[#ff5b5b]">0%</span>
+                    </div>
+                    <div id="researchProgressSteps" class="mt-3 grid gap-1 text-[11px] text-gray-500 sm:grid-cols-5"></div>
+                </div>
                 <form id="assistantForm" class="border-t border-white/10 p-4">
                     @csrf
                     <div class="flex gap-3">
@@ -89,6 +96,43 @@
         const input = document.getElementById('assistantInput');
         const messages = document.getElementById('messages');
         const sendButton = document.getElementById('sendButton');
+        const researchProgress = document.getElementById('researchProgress');
+        const researchProgressMessage = document.getElementById('researchProgressMessage');
+        const researchProgressPercent = document.getElementById('researchProgressPercent');
+        const researchProgressSteps = document.getElementById('researchProgressSteps');
+        let progressPoll = null;
+
+        const stepLabels = {
+            intent: 'Intención',
+            evidence: 'Evidencia',
+            analysis: 'Análisis',
+            synthesis: 'Síntesis',
+            verification: 'Verificación',
+        };
+
+        function renderResearchProgress(progress) {
+            researchProgress.classList.remove('hidden');
+            researchProgressMessage.textContent = progress.message || 'Nexus está procesando la consulta.';
+            researchProgressPercent.textContent = `${progress.progress || 0}%`;
+            researchProgressSteps.innerHTML = Object.entries(stepLabels).map(([key, label]) => {
+                const completed = (progress.completed_steps || []).includes(key);
+                const current = progress.current_step === key;
+                const icon = completed ? '✓' : (current ? '◉' : '○');
+                const color = completed ? 'text-emerald-400' : (current ? 'text-[#ff5b5b]' : 'text-gray-600');
+                return `<span class="${color}">${icon} ${label}</span>`;
+            }).join('');
+        }
+
+        async function pollResearchProgress(token) {
+            try {
+                const response = await fetch(`{{ route('asistente.progress') }}?progress_token=${encodeURIComponent(token)}`, {
+                    headers: {'Accept': 'application/json'}
+                });
+                if (response.ok) renderResearchProgress(await response.json());
+            } catch (error) {
+                // The final assistant request remains the source of truth if polling is unavailable.
+            }
+        }
 
         function addMessage(role, content) {
             const wrapper = document.createElement('div');
@@ -114,22 +158,36 @@
             input.style.height = 'auto';
             sendButton.disabled = true;
             sendButton.textContent = '...';
+            const progressToken = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            renderResearchProgress({message: 'Consulta recibida.', progress: 0, current_step: 'intent', completed_steps: []});
+            await pollResearchProgress(progressToken);
+            progressPoll = window.setInterval(() => pollResearchProgress(progressToken), 500);
             try {
                 const response = await fetch('{{ route('asistente.message') }}', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-CSRF-TOKEN': '{{ csrf_token() }}', 'Accept': 'application/json'},
-                    body: JSON.stringify({message: command})
+                    body: JSON.stringify({message: command, progress_token: progressToken})
                 });
                 if (!response.ok) {
                     addMessage('assistant', 'No pude procesar la instrucción. Revisa la conexión y vuelve a intentarlo.');
                     return;
                 }
                 const data = await response.json();
+                if (data.research) renderResearchProgress(data.research);
                 addMessage('assistant', data.message.content);
                 if (data.navigation) window.location.href = data.navigation;
             } catch (error) {
+                renderResearchProgress({
+                    status: 'failed',
+                    message: 'La investigación falló antes de completar la respuesta.',
+                    progress: 0,
+                    current_step: null,
+                    completed_steps: []
+                });
                 addMessage('assistant', 'No pude conectarme con DevControl. Vuelve a intentarlo.');
             } finally {
+                window.clearInterval(progressPoll);
+                progressPoll = null;
                 sendButton.disabled = false;
                 sendButton.textContent = 'Enviar';
             }

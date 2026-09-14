@@ -7,6 +7,11 @@ use App\Models\NexusMemory;
 use App\Models\NexusMessage;
 class NexusMemoryService
 {
+    private const TECHNICAL_TYPES = [
+        'architecture', 'relation', 'flow', 'decision',
+        'diagnosis', 'solution', 'feature',
+    ];
+
     public function conversation(string $sessionKey, ?int $userId = null): NexusConversation
     {
         return NexusConversation::query()->firstOrCreate(
@@ -65,7 +70,13 @@ class NexusMemoryService
         $existing = NexusMemory::query()
             ->where('usuario_id', $conversation->usuario_id)
             ->where('memory_type', $type)
-            ->where('status', 'active')
+            ->where(function ($query): void {
+                $query->where('status', 'active')
+                    ->orWhere(function ($technical) {
+                        $technical->where('status', 'validated')
+                            ->whereIn('memory_type', self::TECHNICAL_TYPES);
+                    });
+            })
             ->when($projectId !== null, fn ($query) => $query->where('proyecto_id', $projectId))
             ->get()
             ->first(fn (NexusMemory $memory) => $this->similarity($memory->content, $content)
@@ -98,6 +109,104 @@ class NexusMemoryService
         ]);
     }
 
+    /**
+     * Creates technical knowledge only when its origin and evidence are explicit.
+     * Candidates are retained for review but are never treated as validated knowledge.
+     */
+    public function createTechnicalMemory(
+        ?NexusConversation $conversation,
+        string $type,
+        string $content,
+        ?int $projectId,
+        string $origin,
+        array $evidence,
+        int $confidence = 0,
+        string $status = 'candidate',
+        array $metadata = [],
+    ): ?NexusMemory {
+        if (! in_array($type, self::TECHNICAL_TYPES, true)
+            || ! in_array($status, ['candidate', 'validated', 'obsolete', 'invalidated'], true)
+            || trim($content) === ''
+            || trim($origin) === ''
+            || $evidence === []
+            || $this->containsSensitiveData($content)) {
+            return null;
+        }
+
+        $content = trim(preg_replace('/\s+/u', ' ', $content) ?? $content);
+        $confidence = max(0, min(100, $confidence));
+        $key = $this->memoryKey($type, $content);
+
+        return NexusMemory::create([
+            'usuario_id' => $conversation?->usuario_id,
+            'nexus_conversation_id' => $conversation?->id,
+            'proyecto_id' => $projectId,
+            'memory_type' => $type,
+            'memory_key' => $key,
+            'content' => $content,
+            'source' => $origin,
+            'importance' => max(1, min(100, (int) ($metadata['importance'] ?? 70))),
+            'confidence' => $confidence,
+            'status' => $status,
+            'metadata' => array_merge($metadata, [
+                'origin' => $origin,
+                'evidence' => array_values($evidence),
+                'validation_state' => $status,
+            ]),
+            'last_confirmed_at' => $status === 'validated' ? now() : null,
+            'validated_at' => $status === 'validated' ? now() : null,
+        ]);
+    }
+
+    public function validateTechnicalMemory(NexusMemory $memory, string $reason = ''): NexusMemory
+    {
+        $this->assertTechnicalMemory($memory);
+        $memory->update([
+            'status' => 'validated',
+            'confidence' => max($memory->confidence, 75),
+            'metadata' => array_merge($memory->metadata ?? [], [
+                'validation_reason' => trim($reason),
+                'validation_state' => 'validated',
+            ]),
+            'last_confirmed_at' => now(),
+            'validated_at' => now(),
+        ]);
+
+        return $memory->fresh();
+    }
+
+    public function retrieveTechnicalMemory(?int $projectId = null, ?string $type = null)
+    {
+        return NexusMemory::query()
+            ->where('status', 'validated')
+            ->whereIn('memory_type', self::TECHNICAL_TYPES)
+            ->when($projectId !== null, fn ($query) => $query->where('proyecto_id', $projectId))
+            ->when($type !== null, fn ($query) => $query->where('memory_type', $type))
+            ->latest('validated_at')
+            ->get();
+    }
+
+    public function invalidateTechnicalMemory(NexusMemory $memory, string $reason): NexusMemory
+    {
+        $this->assertTechnicalMemory($memory);
+        $memory->update([
+            'status' => 'invalidated',
+            'metadata' => array_merge($memory->metadata ?? [], [
+                'invalidated_reason' => trim($reason),
+                'validation_state' => 'invalidated',
+            ]),
+        ]);
+
+        return $memory->fresh();
+    }
+
+    private function assertTechnicalMemory(NexusMemory $memory): void
+    {
+        if (! in_array($memory->memory_type, self::TECHNICAL_TYPES, true)) {
+            throw new \InvalidArgumentException('La memoria indicada no es memoria técnica.');
+        }
+    }
+
     public function promoteInteraction(
         NexusConversation $conversation,
         string $userMessage,
@@ -106,7 +215,8 @@ class NexusMemoryService
     ): array {
         $candidates = [];
         $projectId = $context['project_id'] ?? $context['proyecto_id'] ?? null;
-        $text = trim($userMessage.' '.($assistantMessage ?? ''));
+        // Assistant prose is not treated as authoritative technical knowledge.
+        $text = trim($userMessage);
 
         foreach ([
             'project' => '/\b(el proyecto|este proyecto|proyecto actual|proyecto se llama)\s*:?\s*(.{10,400})$/iu',
@@ -171,7 +281,13 @@ class NexusMemoryService
                             ->where('usuario_id', $conversation->usuario_id);
                     });
             })
-            ->where('status', 'active')
+            ->where(function ($query): void {
+                $query->where('status', 'active')
+                    ->orWhere(function ($technical) {
+                        $technical->where('status', 'validated')
+                            ->whereIn('memory_type', self::TECHNICAL_TYPES);
+                    });
+            })
             ->when($projectId !== null, function ($query) use ($projectId): void {
                 $query->where(function ($query) use ($projectId): void {
                     $query->whereNull('proyecto_id')->orWhere('proyecto_id', $projectId);

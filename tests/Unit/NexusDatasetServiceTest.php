@@ -49,8 +49,8 @@ class NexusDatasetServiceTest extends TestCase
 
         $this->assertCount(1, NexusDatasetExample::all());
         $export = $service->export(['minimum_quality' => 40]);
-        $this->assertStringContainsString('"PROBLEMA":"Error de autenticación"', $export);
-        $this->assertCount(1, preg_split('/\R/', $export));
+        $this->assertSame('', $export);
+        $this->assertSame('quarantined', NexusDatasetExample::first()->status);
     }
 
     public function test_it_rejects_low_quality_examples(): void

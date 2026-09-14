@@ -62,6 +62,21 @@ class NexusCodeAnalysisService
 
     private function files(string $root): array
     {
+        if (File::isFile($root)) {
+            $relativePath = str_replace(
+                rtrim(str_replace('\\', '/', realpath(base_path())), '/').'/',
+                '',
+                str_replace('\\', '/', $root)
+            );
+            $file = new \Symfony\Component\Finder\SplFileInfo(
+                $root,
+                dirname($relativePath),
+                $relativePath
+            );
+
+            return $file->getSize() <= 500000 ? [$file] : [];
+        }
+
         $excluded = ['vendor', 'node_modules', 'storage', 'bootstrap/cache', '.git'];
 
         return collect(File::allFiles($root))
@@ -104,9 +119,11 @@ class NexusCodeAnalysisService
 
     private function structure(array $files): array
     {
-        return collect($files)->groupBy(fn (\SplFileInfo $file) => $file->getRelativePath())
+        return collect($files)->groupBy(fn (\SplFileInfo $file) => dirname(
+            str_replace('\\', '/', $file->getRelativePathname())
+        ))
             ->map(fn ($group, $directory) => [
-                'directory' => $directory ?: '.',
+                'directory' => $directory === '.' ? '.' : $directory,
                 'files' => $group->count(),
                 'examples' => $group->take(8)->map(fn (\SplFileInfo $file) => $file->getFilename())->values()->all(),
             ])->values()->all();

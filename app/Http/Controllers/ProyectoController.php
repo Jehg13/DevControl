@@ -6,6 +6,7 @@ use App\Models\Actualizacion;
 use App\Models\Proyecto;
 use App\Models\Tarea;
 use App\Models\Configuracion;
+use App\Models\NexusGithubAnalysis;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
@@ -14,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Symfony\Component\Process\Process;
+use Throwable;
 
 class ProyectoController extends Controller
 {
@@ -101,7 +103,9 @@ class ProyectoController extends Controller
         |
         */
 
-        $archivos = collect();
+        $archivos = $proyecto
+            ? $proyecto->nexusCodeFiles()->where('status', 'active')->latest()->get()
+            : collect();
 
         $notas = collect();
 
@@ -340,8 +344,18 @@ class ProyectoController extends Controller
             'progreso' => 0,
         ]);
         $this->guardarIntegracionGithub($proyecto);
+        NexusGithubAnalysis::create([
+            'proyecto_id' => $proyecto->id,
+            'status' => 'pending',
+            'branch' => 'main',
+        ]);
 
-        return $this->importarGithub($proyecto);
+        $respuesta = $this->importarGithub($proyecto);
+        if ($respuesta->getSession()->has('error')) {
+            $proyecto->delete();
+        }
+
+        return $respuesta;
     }
 
     /**
@@ -701,6 +715,10 @@ class ProyectoController extends Controller
                 return back()->with('error', 'No se pudo conectar con GitHub para importar el proyecto.');
             } catch (RequestException $exception) {
                 return back()->with('error', $exception->response?->json('message') ?? 'GitHub rechazó la importación.');
+            } catch (Throwable $exception) {
+                report($exception);
+
+                return back()->with('error', 'La importación del repositorio no pudo completarse. Revisa los registros de Laravel.');
             }
         }
 
@@ -763,7 +781,7 @@ class ProyectoController extends Controller
                     return in_array($extension, $extensiones, true)
                         && ! preg_match('~(^|/)(vendor|node_modules|dist|build|public/build|storage)/~', $normalizado);
                 })
-                ->take(80);
+                ->take(max(1, (int) config('services.github.import_max_files', 20)));
             $secciones = collect();
 
             foreach ($fuentes as $ruta) {
@@ -1217,50 +1235,52 @@ class ProyectoController extends Controller
             return back()->with('error', 'Configura una URL válida de GitHub antes de analizar el repositorio.');
         }
 
-        try {
-            $cliente = $this->clienteGithub();
-            $repositorio = $cliente->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}")->throw()->json();
-            $rama = $repositorio['default_branch'] ?? 'main';
-            $arbol = $cliente->get("https://api.github.com/repos/{$partes['owner']}/{$partes['repo']}/git/trees/{$rama}", [
-                'recursive' => '1',
-            ])->throw()->json();
-            $archivos = collect($arbol['tree'] ?? [])
-                ->where('type', 'blob')
-                ->pluck('path');
-            $extensiones = $archivos
-                ->map(fn (string $path) => strtolower(pathinfo($path, PATHINFO_EXTENSION)))
-                ->filter()
-                ->countBy()
-                ->sortDesc()
-                ->take(8)
-                ->map(fn (int $count, string $extension) => "{$extension}: {$count}")
-                ->implode(', ');
-            $directorios = $archivos
-                ->map(fn (string $path) => explode('/', $path)[0])
-                ->unique()
-                ->take(12)
-                ->implode(', ');
-
-            $integracion?->update([
-                'repositorio_propietario' => $partes['owner'],
-                'repositorio_nombre' => $partes['repo'],
-                'rama_principal' => $rama,
-                'estado' => 'analizado',
-                'ultima_sincronizacion' => now(),
-                'ultimo_error' => null,
-            ]);
-
-            return back()->with(
-                'success',
-                "Análisis de GitHub completado: {$archivos->count()} archivos en {$rama}. ".
-                "Tecnologías detectadas por extensión: ".($extensiones ?: 'no identificadas').". ".
-                "Directorios principales: ".($directorios ?: 'raíz del repositorio').'.'
-            );
-        } catch (ConnectionException $exception) {
-            return back()->with('error', 'No se pudo conectar con GitHub para analizar el repositorio.');
-        } catch (RequestException $exception) {
-            return back()->with('error', $exception->response?->json('message') ?? 'GitHub rechazó el análisis del repositorio.');
+        $actual = NexusGithubAnalysis::where('proyecto_id', $proyecto->id)
+            ->whereIn('status', ['pending', 'processing'])
+            ->latest('id')
+            ->first();
+        if ($actual) {
+            return back()->with('success', 'El análisis de GitHub ya está en curso; consulta su progreso en unos momentos.');
         }
+
+        NexusGithubAnalysis::create([
+            'proyecto_id' => $proyecto->id,
+            'status' => 'pending',
+            'branch' => $integracion->rama_principal,
+        ]);
+        $integracion->update([
+            'repositorio_propietario' => $partes['owner'],
+            'repositorio_nombre' => $partes['repo'],
+            'estado' => 'analizando',
+            'ultimo_intento' => now(),
+            'ultimo_error' => null,
+        ]);
+
+        return back()->with('success', 'Análisis completo de GitHub iniciado por lotes. El progreso quedará disponible mientras se procesa.');
+    }
+
+    public function estadoAnalisisGithub(Proyecto $proyecto)
+    {
+        $analysis = NexusGithubAnalysis::where('proyecto_id', $proyecto->id)->latest('id')->first();
+
+        if (! $analysis) {
+            return response()->json(['status' => 'idle']);
+        }
+
+        return response()->json([
+            'id' => $analysis->id,
+            'status' => $analysis->status,
+            'branch' => $analysis->branch,
+            'total_files' => $analysis->total_files,
+            'processed_files' => $analysis->processed_files,
+            'skipped_files' => $analysis->skipped_files,
+            'progress' => $analysis->total_files > 0
+                ? round(($analysis->cursor / $analysis->total_files) * 100, 2)
+                : 0,
+            'error' => $analysis->error,
+            'started_at' => $analysis->started_at,
+            'finished_at' => $analysis->finished_at,
+        ]);
     }
 
     public function crearCommitGithub(Request $request, Proyecto $proyecto)
@@ -1559,7 +1579,8 @@ class ProyectoController extends Controller
         $cliente = Http::acceptJson()
             ->withHeaders(['User-Agent' => 'DevControl'])
             ->withOptions(['verify' => config('services.github.ca_bundle') ?: true])
-            ->timeout(20);
+            ->connectTimeout(5)
+            ->timeout(10);
 
         return $authenticated
             ? $cliente->withToken(config('services.github.token'))

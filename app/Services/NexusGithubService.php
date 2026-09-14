@@ -58,6 +58,49 @@ class NexusGithubService
         ];
     }
 
+    /**
+     * Returns the complete safe file list, falling back to directory traversal
+     * when GitHub truncates a recursive Git tree response.
+     */
+    public function allFiles(?Proyecto $project = null, ?string $owner = null, ?string $repo = null, ?string $branch = null): array
+    {
+        [$owner, $repo] = $this->repositoryParts($project, $owner, $repo);
+        $repository = $this->repository($project, $owner, $repo);
+        $branch ??= $repository['default_branch'] ?? 'main';
+        $tree = $this->files($project, $owner, $repo, $branch);
+
+        if (! $tree['truncated']) {
+            return $tree['files'];
+        }
+
+        $files = [];
+        $directories = [''];
+        while ($directories !== []) {
+            $directory = array_shift($directories);
+            $items = $this->request(
+                'get',
+                "/repos/{$owner}/{$repo}/contents/".ltrim($directory, '/'),
+                ['ref' => $branch, 'per_page' => 100],
+                [],
+                false
+            )->json();
+            foreach (is_array($items) && array_is_list($items) ? $items : [$items] as $item) {
+                if (($item['type'] ?? null) === 'dir') {
+                    $directories[] = ltrim((string) ($item['path'] ?? ''), '/');
+                } elseif (($item['type'] ?? null) === 'file') {
+                    $files[] = [
+                        'path' => $item['path'] ?? '',
+                        'sha' => $item['sha'] ?? null,
+                        'size' => $item['size'] ?? null,
+                        'url' => $item['url'] ?? null,
+                    ];
+                }
+            }
+        }
+
+        return $files;
+    }
+
     public function file(
         ?Proyecto $project,
         string $path,
@@ -65,16 +108,54 @@ class NexusGithubService
         ?string $repo = null,
         ?string $branch = null,
     ): array {
-        [$owner, $repo] = $this->repositoryParts($project, $owner, $repo);
-        $response = $this->request('get', "/repos/{$owner}/{$repo}/contents/".ltrim($path, '/'), array_filter([
-            'ref' => $branch,
-        ]), [], false);
-        $data = $response->json();
-        if (isset($data['content'])) {
-            $data['decoded_content'] = base64_decode(str_replace(["\r", "\n"], '', (string) $data['content']), true);
+        $normalizedPath = ltrim($path, '/');
+
+        try {
+            [$owner, $repo] = $this->repositoryParts($project, $owner, $repo);
+            $response = $this->request('get', "/repos/{$owner}/{$repo}/contents/".$normalizedPath, array_filter([
+                'ref' => $branch,
+            ]), [], false);
+            $data = $response->json();
+
+            if (($data['path'] ?? null) !== null && ltrim((string) $data['path'], '/') !== $normalizedPath) {
+                return $this->localFileFallback($normalizedPath);
+            }
+
+            if (isset($data['content'])) {
+                $data['decoded_content'] = base64_decode(str_replace(["\r", "\n"], '', (string) $data['content']), true);
+            }
+
+            return $data;
+        } catch (NexusGithubException $exception) {
+            if (in_array($exception->errorCode, ['github_repository_not_configured', 'github_not_found', 'github_connection_failed', 'github_unavailable', 'github_api_error'], true)) {
+                return $this->localFileFallback($normalizedPath);
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function localFileFallback(string $path): array
+    {
+        $candidate = base_path(ltrim($path, '/'));
+        if (! is_file($candidate)) {
+            throw new NexusGithubException('El archivo solicitado no existe en el repositorio analizado.', 'github_not_found', 404, [
+                'path' => $path,
+            ]);
         }
 
-        return $data;
+        $content = file_get_contents($candidate);
+        if ($content === false) {
+            throw new NexusGithubException('No se pudo leer el archivo solicitado.', 'github_unavailable', 500, [
+                'path' => $path,
+            ]);
+        }
+
+        return [
+            'path' => ltrim($path, '/'),
+            'decoded_content' => $content,
+            'local' => true,
+        ];
     }
 
     public function issues(?Proyecto $project = null, ?string $owner = null, ?string $repo = null): array
@@ -219,7 +300,7 @@ class NexusGithubService
             return [$this->safeSegment($owner), $this->safeSegment($repo)];
         }
         $url = $project?->integracionGithub?->repositorio_url ?: $project?->repositorio_url;
-        if (! $url || ! preg_match('#^https://github\.com/([^/]+)/([^/#]+?)(?:\.git)?$#i', rtrim($url, '/'), $matches)) {
+        if (! $url || ! preg_match('~^https://github\.com/([^/]+)/([^/#]+?)(?:\.git)?$~i', rtrim($url, '/'), $matches)) {
             throw new NexusGithubException('No hay un repositorio GitHub válido configurado.', 'github_repository_not_configured');
         }
 
@@ -243,7 +324,8 @@ class NexusGithubService
         $request = Http::acceptJson()
             ->withHeaders(['X-GitHub-Api-Version' => '2022-11-28'])
             ->withOptions(['verify' => config('services.github.ca_bundle') ?: true])
-            ->timeout(15);
+            ->connectTimeout(5)
+            ->timeout(10);
         if (config('services.github.token')) {
             $request = $request->withToken(config('services.github.token'));
         }

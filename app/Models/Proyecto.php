@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Services\DevControlAlertService;
+use App\Models\NexusCodeFile;
 
 /**
  * @property int $id
@@ -105,5 +106,15 @@ class Proyecto extends Model
     public function nexusInfrastructures()
     {
         return $this->hasMany(NexusInfrastructure::class, 'proyecto_id');
+    }
+
+    public function nexusGithubAnalyses()
+    {
+        return $this->hasMany(NexusGithubAnalysis::class, 'proyecto_id');
+    }
+
+    public function nexusCodeFiles()
+    {
+        return $this->hasMany(NexusCodeFile::class, 'proyecto_id');
     }
 }

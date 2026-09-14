@@ -22,11 +22,6 @@ def main() -> None:
     parser.add_argument("--checkpoint-interval", type=int, default=25)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--resume")
-    parser.add_argument(
-        "--require-approval",
-        action="store_true",
-        help="refuse to train unless the dataset has an operator approval marker",
-    )
     args = parser.parse_args()
     if args.eval_interval < 1 or args.checkpoint_interval < 1:
         parser.error("evaluation and checkpoint intervals must be positive")
@@ -43,7 +38,7 @@ def main() -> None:
             checkpoint_interval=args.checkpoint_interval,
         ),
         resume=args.resume,
-        require_approval=args.require_approval,
+        require_approval=True,
     )
     print(json.dumps(summary, indent=2))
 

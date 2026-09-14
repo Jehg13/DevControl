@@ -13,11 +13,14 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use App\Services\NexusAuditService;
-use App\Services\NexusReasoningService;
+use App\Services\NexusExecutionService;
 use App\Services\NexusMemoryService;
+use App\Nexus\NexusRuntime;
+use App\Nexus\NexusRuntimeRequest;
 use App\Nexus\NexusToolContext;
 use App\Nexus\NexusToolRegistry;
 
@@ -138,31 +141,109 @@ class AsistenteController extends Controller
         ]);
     }
 
-    public function message(Request $request, NexusReasoningService $reasoning, NexusMemoryService $memory)
+    private function isNexusCapabilitiesInstruction(string $text): bool
+    {
+        return $this->hasApproximateTerm($text, ['nexus', 'capacidad', 'capacidades', 'modelo local', 'tool calling'])
+            && $this->hasApproximateTerm($text, ['puedes', 'hacer', 'actualmente', 'requiere', 'habilitado', 'disponible']);
+    }
+
+    private function nexusCapabilitiesMessage(): string
+    {
+        $definitions = app(NexusToolRegistry::class)->definitions();
+        $toolNames = collect($definitions)->pluck('name')->values()->all();
+        $localArtifacts = is_file(base_path('storage/app/nexus-model/latest.json'))
+            && is_file(base_path('storage/app/nexus-model/tokenizer.json'));
+        $localEnabled = (bool) config('nexus.ai.enabled');
+        $driver = (string) config('nexus.ai.driver', 'none');
+
+        return "Capacidades actuales de Nexus\n\n".
+            "Operativas ahora:\n".
+            "- Chat determinista para conversación, navegación, consultas de DevControl y acciones con confirmación.\n".
+            "- Memoria conversacional y recuperación de contexto.\n".
+            "- Herramientas registradas con permisos y límites externos al modelo.\n".
+            "- Lectura de evidencia local y GitHub mediante herramientas de solo lectura.\n".
+            "- Herramientas disponibles: ".($toolNames !== [] ? implode(', ', $toolNames) : 'ninguna').".\n\n".
+            "Implementadas arquitectónicamente pero limitadas:\n".
+            "- Nexus Core, ejecución, planificación, reflexión, memoria, permisos, seguridad y registro de resultados están conectados.\n".
+            "- El flujo de tool calling está preparado para un adaptador que lo soporte.\n\n".
+            "Requieren modelo local o un adaptador compatible habilitado:\n".
+            "- Razonamiento generado por modelo.\n".
+            "- Selección autónoma de herramientas y tool calling.\n".
+            "- Respuestas generativas basadas en los resultados de varias herramientas.\n".
+            "Estado del runtime local: ".($localEnabled ? "habilitado con driver {$driver}" : 'deshabilitado').
+            "; artefactos presentes: ".($localArtifacts ? 'sí' : 'no').".\n\n".
+            "No disponibles todavía:\n".
+            "- Inferencia local demostrada end-to-end con checkpoint y tokenizer reales.\n".
+            "- Tool calling autónomo del modelo local mientras sus capacidades sigan declarando toolCalling=false.";
+    }
+
+    public function message(
+        Request $request,
+        NexusExecutionService $execution,
+        NexusMemoryService $memory,
+        NexusToolRegistry $tools
+    )
     {
         $validated = $request->validate([
             'message' => ['required', 'string', 'max:20000'],
+            'project_id' => ['nullable', 'integer', 'min:1'],
+            'progress_token' => ['nullable', 'string', 'max:100'],
         ]);
+        $progressToken = $validated['progress_token'] ?? null;
+        $this->updateResearchProgress($request, $progressToken, 'pending', 'intent', [], [
+            'intent', 'evidence', 'analysis', 'synthesis', 'verification',
+        ], 'Consulta recibida.');
+        $this->updateResearchProgress($request, $progressToken, 'analyzing', 'intent', [], [
+            'intent', 'evidence', 'analysis', 'synthesis', 'verification',
+        ], 'Comprendiendo la intención de la consulta.');
 
         $messages = $request->session()->get('assistant_messages', []);
         $messages[] = ['role' => 'user', 'content' => $validated['message']];
         $conversation = $memory->conversation($request->session()->getId(), $request->user()?->id);
         $memory->recordMessage($conversation, 'user', $validated['message'], ['source' => 'legacy_chat']);
-        $reasoningResult = $reasoning->reason(
-            $validated['message'],
-            $memory->relevantContext($conversation, $validated['message'], [
-                'route' => $request->route()?->getName(),
-                'user_role' => $request->user()?->rol,
-                'pending_action' => $request->session()->get('assistant_pending_action'),
-                'modules' => $this->moduleStatus(),
-            ])
-        );
-
-        $response = $this->processInstruction(
-            $validated['message'],
-            $messages,
-            $request->session()->get('assistant_pending_action')
-        );
+        $context = [
+            'route' => $request->route()?->getName(),
+            'user_role' => $request->user()?->rol,
+            'pending_action' => $request->session()->get('assistant_pending_action'),
+            'modules' => $this->moduleStatus(),
+            'project_id' => $validated['project_id'] ?? null,
+            'permissions' => ['nexus.read'],
+        ];
+        try {
+            $response = $this->executeNexusChat(
+                $request,
+                $validated['message'],
+                $messages,
+                $context,
+                $execution,
+                $tools
+            );
+            if ($response === null) {
+                $this->updateResearchProgress($request, $progressToken, 'analyzing', 'synthesis', [
+                    'intent', 'evidence', 'analysis',
+                ], ['synthesis', 'verification'], 'Preparando la respuesta.');
+                $response = $this->processInstruction(
+                    $validated['message'],
+                    $messages,
+                    $request->session()->get('assistant_pending_action')
+                );
+            }
+        } catch (\Throwable $exception) {
+            $this->updateResearchProgress(
+                $request,
+                $progressToken,
+                'failed',
+                null,
+                [],
+                [],
+                'La investigación no pudo completarse.',
+                $exception->getMessage()
+            );
+            throw $exception;
+        }
+        $this->updateResearchProgress($request, $progressToken, 'completed', null, [
+            'intent', 'evidence', 'analysis', 'synthesis', 'verification',
+        ], [], 'Investigación completada.');
         $messages[] = $response['message'];
         $memory->recordMessage($conversation, 'assistant', $response['message']['content'], ['source' => 'legacy_chat']);
         $memory->promoteInteraction(
@@ -184,8 +265,1422 @@ class AsistenteController extends Controller
         return response()->json([
             'message' => $response['message'],
             'navigation' => $response['navigation'],
-            'reasoning' => $reasoningResult->toArray(),
+            'reasoning' => $response['reasoning'] ?? null,
+            'nexus' => $response['nexus'] ?? null,
+            'research' => $this->getResearchProgress($request, $progressToken),
         ]);
+    }
+
+    public function researchProgress(Request $request)
+    {
+        $token = $request->query('progress_token');
+        $progress = $this->getResearchProgress($request, $token);
+
+        return response()->json($progress);
+    }
+
+    /** @return array<string, mixed> */
+    private function getResearchProgress(Request $request, ?string $token): array
+    {
+        if (! is_string($token) || $token === '') {
+            return [
+                'status' => 'pending',
+                'current_step' => null,
+                'completed_steps' => [],
+                'pending_steps' => [],
+                'message' => null,
+                'progress' => 0,
+                'started_at' => null,
+                'completed_at' => null,
+                'error' => null,
+            ];
+        }
+
+        return Cache::get($this->researchProgressKey($request, $token), [
+            'status' => 'pending',
+            'current_step' => null,
+            'completed_steps' => [],
+            'pending_steps' => [],
+            'message' => 'Esperando el inicio de la investigación.',
+            'progress' => 0,
+            'started_at' => null,
+            'completed_at' => null,
+            'error' => null,
+        ]);
+    }
+
+    private function updateResearchProgress(
+        Request $request,
+        ?string $token,
+        string $status,
+        ?string $currentStep,
+        array $completedSteps,
+        array $pendingSteps,
+        ?string $message,
+        ?string $error = null
+    ): void {
+        if (! is_string($token) || $token === '') {
+            return;
+        }
+
+        $now = now()->toIso8601String();
+        $progress = [
+            'status' => $status,
+            'current_step' => $currentStep,
+            'completed_steps' => array_values(array_unique($completedSteps)),
+            'pending_steps' => array_values(array_unique($pendingSteps)),
+            'message' => $message,
+            'progress' => min(100, (int) round(count($completedSteps) / 5 * 100)),
+            'started_at' => $this->getResearchProgress($request, $token)['started_at'] ?? $now,
+            'completed_at' => in_array($status, ['completed', 'failed'], true) ? $now : null,
+            'error' => $error,
+        ];
+        Cache::put($this->researchProgressKey($request, $token), $progress, now()->addMinutes(30));
+    }
+
+    private function researchProgressKey(Request $request, string $token): string
+    {
+        return 'nexus.research.'.hash('sha256', $request->session()->getId().'|'.$token);
+    }
+
+    private function executeNexusChat(
+        Request $request,
+        string $input,
+        array $history,
+        array $context,
+        NexusExecutionService $execution,
+        NexusToolRegistry $tools
+    ): ?array {
+        $runtime = app(NexusRuntime::class);
+        $runtimeResult = $runtime->handle(new NexusRuntimeRequest(
+            message: $input,
+            user: $request->user(),
+            projectId: $context['project_id'] ?? null,
+            project: null,
+            conversation: ['session_id' => $request->session()->getId()],
+            context: $context,
+            history: $history,
+            metadata: ['route' => $request->route()?->getName()],
+        ));
+
+        if ($runtimeResult->status === 'awaiting_confirmation') {
+            return [
+                'message' => ['role' => 'assistant', 'content' => $runtimeResult->finalMessage],
+                'navigation' => $runtimeResult->navigation,
+                'reasoning' => $runtimeResult->toArray(),
+                'nexus' => [
+                    'source' => $runtimeResult->source,
+                    'status' => $runtimeResult->status,
+                    'tools_used' => $runtimeResult->toolsUsed,
+                ],
+            ];
+        }
+
+        if ($runtimeResult->source !== 'runtime_general' || $runtimeResult->toolsUsed !== []) {
+            return [
+                'message' => ['role' => 'assistant', 'content' => $runtimeResult->finalMessage],
+                'navigation' => $runtimeResult->navigation,
+                'reasoning' => $runtimeResult->toArray(),
+                'nexus' => [
+                    'source' => $runtimeResult->source,
+                    'status' => $runtimeResult->status,
+                    'tools_used' => $runtimeResult->toolsUsed,
+                ],
+            ];
+        }
+
+        if (! $this->requiresRepositoryEvidence($input)) {
+            return null;
+        }
+
+        return $this->readRepositoryEvidence(
+            $request,
+            $input,
+            $context,
+            $tools
+        );
+    }
+
+    private function requiresRepositoryEvidence(string $input): bool
+    {
+        $intent = $this->repositoryIntent($input);
+        if ($intent['intent'] === 'general') {
+            return false;
+        }
+        if (in_array($intent['intent'], ['planning', 'execution'], true)) {
+            return false;
+        }
+        $text = $this->normalizeInstruction($input);
+        $readIntent = $this->hasApproximateTerm($text, [
+            'busca', 'buscar', 'lee', 'leer', 'revisa', 'revisar', 'analiza',
+            'analizar', 'indica', 'dime', 'exactamente', 'evidencia', 'explica',
+            'describir', 'describe', 'investiga', 'funciona', 'maneja', 'ocurre',
+            'fallar', 'falla', 'problema', 'por que', 'porque',
+        ]);
+        $repositoryScope = $this->hasApproximateTerm($text, ['repositorio', 'github']);
+        $codeTarget = $this->hasApproximateTerm($text, [
+            'archivo', 'file', 'modelo', 'controlador', 'rutas', 'route',
+            'composer.json', 'package.json', 'codigo', 'código', 'dependencia',
+            'dependencias', 'framework', 'proyecto', 'proyectos', 'creacion',
+            'creación', 'guardar', 'crear', 'aparecen', 'relaciones',
+        ]) || preg_match('/(?:^|\s)(?:app|routes|config|database)\/[A-Za-z0-9._\/-]+\.[A-Za-z0-9]+/i', $input) === 1;
+
+        return $readIntent && ($repositoryScope || $codeTarget)
+            || in_array($intent['intent'], [
+                'method_analysis',
+                'relation_analysis',
+                'functionality_flow',
+                'diagnosis',
+            ], true);
+    }
+
+    private function isGeneralDevControlQuestion(string $text): bool
+    {
+        return $this->hasApproximatePhrase($text, [
+            'que hace devcontrol',
+            'que es devcontrol',
+            'que es dev control',
+            'para que sirve devcontrol',
+            'para que sirve dev control',
+        ]) && ! $this->hasApproximateTerm($text, [
+            'crear', 'creacion', 'creación', 'proyecto', 'proyectos', 'fallar',
+            'falla', 'problema', 'ruta', 'controller', 'codigo', 'código',
+        ]);
+    }
+
+    private function repositoryQueryIntent(string $input): string
+    {
+        return match ($this->repositoryIntent($input)['intent']) {
+            'functionality_flow' => 'repository_explanation',
+            'method_analysis' => 'code_analysis',
+            'relation_analysis' => 'repository_explanation',
+            'diagnosis' => 'diagnostic',
+            'general' => 'general_conversation',
+            default => $this->repositoryIntent($input)['intent'],
+        };
+    }
+
+    /** @return array<string, mixed> */
+    private function repositoryIntent(string $input): array
+    {
+        $text = $this->normalizeInstruction($input);
+        $method = $this->requestedMethodName($input);
+        $controller = $this->requestedControllerName($input);
+        $relation = $this->requestedRelationName($input);
+
+        if (preg_match('/\bplanific\w*/iu', $input) === 1) {
+            return ['intent' => 'planning', 'target_type' => 'system_component', 'target' => null, 'requested_action' => 'plan', 'response_mode' => 'narrative', 'confidence' => 0.8, 'investigation_requirements' => ['scope', 'dependencies']];
+        }
+        if ($this->isGeneralDevControlQuestion($text)) {
+            return [
+                'intent' => 'general',
+                'target_type' => 'system',
+                'target' => 'DevControl',
+                'requested_action' => 'describe',
+                'response_mode' => 'narrative',
+                'confidence' => 0.98,
+                'investigation_requirements' => [],
+            ];
+        }
+        if ($this->hasApproximateTerm($text, ['ejecuta', 'ejecutar', 'aplica', 'aplicar', 'corre', 'corregir'])) {
+            return ['intent' => 'execution', 'target_type' => 'unknown', 'target' => null, 'requested_action' => 'execute', 'response_mode' => 'action', 'confidence' => 0.8, 'investigation_requirements' => []];
+        }
+        if ($method !== null || $controller !== null) {
+            return [
+                'intent' => 'method_analysis',
+                'target_type' => 'method',
+                'target' => ($controller ?: 'ProyectoController').'@'.($method ?: 'index'),
+                'requested_action' => 'explain',
+                'response_mode' => 'narrative',
+                'confidence' => $method !== null && $controller !== null ? 0.98 : 0.86,
+                'investigation_requirements' => ['class', 'method', 'method_body', 'used_references'],
+            ];
+        }
+        if ($relation !== null || $this->hasApproximateTerm($text, ['relacion', 'relaciones'])) {
+            return [
+                'intent' => 'relation_analysis',
+                'target_type' => 'relation',
+                'target' => $relation ?: 'Proyecto',
+                'requested_action' => 'explain',
+                'response_mode' => 'narrative',
+                'confidence' => $relation !== null ? 0.94 : 0.78,
+                'investigation_requirements' => ['source_model', 'relation_definition', 'related_model'],
+            ];
+        }
+        if ($this->hasApproximateTerm($text, ['impacto', 'afectad', 'cambiaria', 'cambiaría'])) {
+            return ['intent' => 'impact_analysis', 'target_type' => 'system_component', 'target' => null, 'requested_action' => 'analyze', 'response_mode' => 'narrative', 'confidence' => 0.8, 'investigation_requirements' => ['references', 'dependencies']];
+        }
+        if ($this->hasApproximatePhrase($text, ['como arreglar', 'como solucionarias', 'como solucionaría'])
+            || $this->hasApproximateTerm($text, ['solucion', 'solucionar', 'propuesta'])) {
+            return ['intent' => 'solution_proposal', 'target_type' => 'system_component', 'target' => null, 'requested_action' => 'propose', 'response_mode' => 'narrative', 'confidence' => 0.8, 'investigation_requirements' => ['diagnosis', 'supporting_evidence']];
+        }
+        if ($this->hasApproximatePhrase($text, [
+            'falla', 'fallar', 'problema', 'investiga por que', 'porque',
+            'no aparecen', 'no funciona', 'diagnostica',
+        ])) {
+            return ['intent' => 'diagnosis', 'target_type' => 'functionality', 'target' => null, 'requested_action' => 'investigate', 'response_mode' => 'diagnostic', 'confidence' => 0.9, 'investigation_requirements' => ['creation_flow', 'read_flow', 'failure_points', 'hypotheses']];
+        }
+        if ($this->hasApproximateTerm($text, ['compar', 'diferencia'])) {
+            return ['intent' => 'comparison', 'target_type' => 'system_components', 'target' => null, 'requested_action' => 'compare', 'response_mode' => 'narrative', 'confidence' => 0.82, 'investigation_requirements' => ['parallel_flows']];
+        }
+        if (preg_match('/\bplanific\w*/u', $text) === 1
+            || $this->hasApproximateTerm($text, ['plan', 'pasos', 'tareas a realizar'])) {
+            return ['intent' => 'planning', 'target_type' => 'system_component', 'target' => null, 'requested_action' => 'plan', 'response_mode' => 'narrative', 'confidence' => 0.8, 'investigation_requirements' => ['scope', 'dependencies']];
+        }
+        if ($this->hasApproximateTerm($text, ['ejecuta', 'ejecutar', 'aplica', 'aplicar', 'corre', 'corregir'])) {
+            return ['intent' => 'execution', 'target_type' => 'system_component', 'target' => null, 'requested_action' => 'execute', 'response_mode' => 'action', 'confidence' => 0.8, 'investigation_requirements' => ['authorization']];
+        }
+        if ($this->requestedMethodName($input) !== null
+            || preg_match('/\b[A-Za-z_][A-Za-z0-9_]*Controller\s*@\s*[A-Za-z_][A-Za-z0-9_]*/i', $input) === 1
+            || $this->hasApproximateTerm($text, ['codigo', 'código', 'clase', 'metodo', 'método', 'implementacion', 'implementación'])) {
+            return ['intent' => 'method_analysis', 'target_type' => 'code', 'target' => null, 'requested_action' => 'analyze', 'response_mode' => 'narrative', 'confidence' => 0.75, 'investigation_requirements' => ['implementation']];
+        }
+        if ($this->hasApproximateTerm($text, ['evidencia', 'exactamente', 'contenido', 'lee', 'leer', 'busca', 'buscar'])) {
+            return ['intent' => 'evidence_extraction', 'target_type' => 'repository', 'target' => null, 'requested_action' => 'extract', 'response_mode' => 'evidence', 'confidence' => 0.8, 'investigation_requirements' => ['requested_source']];
+        }
+        if (preg_match('/\bplanific\w*/u', $text) === 1
+            || $this->hasApproximateTerm($text, ['pasos'])
+            || $this->hasApproximatePhrase($text, ['tareas a realizar'])) {
+            return ['intent' => 'planning', 'target_type' => 'system_component', 'target' => null, 'requested_action' => 'plan', 'response_mode' => 'narrative', 'confidence' => 0.8, 'investigation_requirements' => ['scope', 'dependencies']];
+        }
+        if ($this->hasApproximatePhrase($text, [
+            'explica', 'describ', 'como funciona', 'como se relacionan', 'que ocurre', 'flujo',
+        ])) {
+            return ['intent' => 'functionality_flow', 'target_type' => 'functionality', 'target' => null, 'requested_action' => 'explain', 'response_mode' => 'narrative', 'confidence' => 0.9, 'investigation_requirements' => ['routes', 'controller', 'models', 'view']];
+        }
+        return ['intent' => 'repository_query', 'target_type' => 'repository', 'target' => null, 'requested_action' => 'inspect', 'response_mode' => 'evidence', 'confidence' => 0.6, 'investigation_requirements' => ['relevant_source']];
+    }
+
+    private function readRepositoryEvidence(
+        Request $request,
+        string $input,
+        array $context,
+        NexusToolRegistry $tools
+    ): array {
+        $paths = $this->repositoryEvidencePaths($input);
+        $progressToken = $request->input('progress_token');
+        $this->updateResearchProgress($request, $progressToken, 'analyzing', 'evidence', [
+            'intent',
+        ], ['evidence', 'analysis', 'synthesis', 'verification'], 'Seleccionando fuentes de evidencia.');
+        $narrativeIntent = in_array($this->repositoryIntent($input)['intent'], [
+            'functionality_flow',
+            'method_analysis',
+            'relation_analysis',
+        ], true);
+
+        if (count($paths) > 1) {
+            $results = [];
+            foreach ($paths as $path) {
+                $results[] = $this->readSingleRepositoryEvidence(
+                    $request,
+                    $input,
+                    $context,
+                    $tools,
+                    $path
+                );
+            }
+
+            if ($narrativeIntent) {
+                $this->updateResearchProgress($request, $progressToken, 'analyzing', 'synthesis', [
+                    'intent', 'evidence', 'analysis',
+                ], ['synthesis', 'verification'], 'Construyendo una explicación basada en la evidencia.');
+                return [
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => $this->synthesizeRepositoryExplanation($input, $results),
+                    ],
+                    'navigation' => null,
+                    'nexus' => [
+                        'source' => 'deterministic_evidence_synthesis',
+                        'evidence_graph' => $this->buildEvidenceGraph($input, $results),
+                        'operations' => array_map(
+                            fn (array $result): array => $result['nexus'] ?? [],
+                            $results
+                        ),
+                    ],
+                ];
+            }
+
+            return [
+                'message' => [
+                    'role' => 'assistant',
+                    'content' => collect($results)
+                        ->map(fn (array $result, int $index): string =>
+                            "Análisis independiente ".($index + 1).":\n\n".$result['message']['content'])
+                        ->implode("\n\n"),
+                ],
+                'navigation' => null,
+                'nexus' => [
+                    'source' => 'deterministic_readonly_tools',
+                    'intent' => $this->repositoryIntent($input),
+                    'evidence_graph' => $this->buildEvidenceGraph($input, $results),
+                    'operations' => array_map(
+                        fn (array $result): array => $result['nexus'] ?? [],
+                        $results
+                    ),
+                ],
+            ];
+        }
+
+        return $this->readSingleRepositoryEvidence(
+            $request,
+            $input,
+            $context,
+            $tools,
+            $paths[0] ?? $this->repositoryEvidencePath($input)
+        );
+    }
+
+    private function readSingleRepositoryEvidence(
+        Request $request,
+        string $input,
+        array $context,
+        NexusToolRegistry $tools,
+        string $path
+    ): array {
+        $project = $this->resolveRepositoryProject($request, $input);
+        $remoteRepository = $project?->integracionGithub !== null;
+        $narrativeIntent = in_array($this->repositoryIntent($input)['intent'], [
+            'functionality_flow',
+            'method_analysis',
+            'relation_analysis',
+        ], true);
+
+        if ($this->hasApproximateTerm($this->normalizeInstruction($input), ['github', 'repositorio']) && ! $remoteRepository) {
+            return [
+                'message' => [
+                    'role' => 'assistant',
+                    'content' => 'Necesito un proyecto con una integración de GitHub configurada para consultar evidencia remota. Indica el proyecto o proporciona project_id.',
+                ],
+                'navigation' => route('proyectos.index'),
+                'nexus' => ['source' => 'deterministic_readonly_tool', 'tool' => 'nexus.github.inspect', 'status' => 'project_context_required'],
+            ];
+        }
+
+        if ($remoteRepository) {
+            $result = $this->readGithubFile($request, $project, $path, $tools);
+            $evidence = $result->toArray();
+            $content = data_get($evidence, 'data.decoded_content');
+            $repositoryParts = $this->repositoryPartsFromUrl($project->integracionGithub->repositorio_url);
+            $repository = ($project->integracionGithub->repositorio_propietario
+                ?: ($repositoryParts['owner'] ?? 'desconocido')).'/'
+                .($project->integracionGithub->repositorio_nombre
+                    ?: ($repositoryParts['repo'] ?? 'desconocido'));
+
+            if ($result->successful && is_string($content)
+                && ($this->requiresCodeAnalysis($input) || $narrativeIntent)) {
+                $this->updateResearchProgress($request, $request->input('progress_token'), 'analyzing', 'analysis', [
+                    'intent', 'evidence',
+                ], ['analysis', 'synthesis', 'verification'], 'Analizando la evidencia obtenida.');
+                $requestedMethod = $this->requestedMethodName($input);
+                $analysis = $requestedMethod
+                    ? $this->analyzeRepositoryMethodContent($path, $content, $requestedMethod)
+                    : $this->analyzeRepositoryContent($path, $content);
+
+                if ($this->requiresModelDiscovery($input)) {
+                    $analysis = $this->addRelatedModelEvidence(
+                        $request,
+                        $project,
+                        $tools,
+                        $content,
+                        $analysis,
+                        $this->requestedModelClass($input)
+                    );
+                }
+
+                $response = [
+                    'path' => $path,
+                    'content' => $content,
+                    'analysis' => $analysis,
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => $this->formatRepositoryAnalysisEvidence($repository, $path, $analysis, $content),
+                    ],
+                    'navigation' => null,
+                    'nexus' => [
+                        'source' => 'deterministic_readonly_tools',
+                        'intent' => $this->repositoryIntent($input),
+                        'tools' => ['nexus.github.inspect'],
+                        'analysis' => 'deterministic_php_parser',
+                        'result' => $evidence,
+                    ],
+                ];
+
+                if ($narrativeIntent) {
+                    $response['message']['content'] = $this->synthesizeRepositoryExplanation($input, [[
+                        'path' => $path,
+                        'content' => $content,
+                        'analysis' => $analysis,
+                        'message' => $response['message'],
+                        'nexus' => $response['nexus'],
+                    ]]);
+                    $response['nexus']['source'] = 'deterministic_evidence_synthesis';
+                    $response['nexus']['evidence_graph'] = $this->buildEvidenceGraph($input, [[
+                        'path' => $path,
+                        'content' => $content,
+                        'analysis' => $analysis,
+                    ]]);
+                }
+
+                return $response;
+            }
+
+            return [
+                'path' => $path,
+                'content' => $content,
+                'message' => [
+                    'role' => 'assistant',
+                    'content' => $result->successful
+                        ? $this->formatRepositoryFileEvidence($repository, $path, $content, $evidence)
+                        : ($result->errorCode === 'github_not_found'
+                            ? "El archivo {$path} no existe en {$repository}. La evidencia fue la respuesta 404 de GitHub para esa ruta."
+                            : 'No pude consultar el archivo del repositorio: '.($result->error ?? 'error de lectura.')),
+                ],
+                'navigation' => null,
+                'nexus' => ['source' => 'deterministic_readonly_tool', 'tool' => 'nexus.github.inspect', 'result' => $evidence],
+            ];
+        }
+
+        $result = $tools->execute(
+            'nexus.code.analyze',
+            [
+                'project_id' => $context['project_id'] ?? null,
+                'path' => $path,
+                'include_documentation' => true,
+            ],
+            new NexusToolContext(
+                user: $request->user(),
+                source: 'legacy_chat',
+                confirmed: true,
+                grantedPermissions: ['nexus.read'],
+                projectId: $context['project_id'] ?? null,
+                toolName: 'nexus.code.analyze',
+            )
+        );
+        $evidence = $result->toArray();
+
+        return [
+            'message' => [
+                'role' => 'assistant',
+                'content' => $result->successful
+                    ? $this->formatLocalCodeEvidence($path, $evidence)
+                    : 'No pude analizar el código local: '.($result->error ?? 'error de análisis.'),
+            ],
+            'navigation' => null,
+            'nexus' => ['source' => 'deterministic_readonly_tool', 'tool' => 'nexus.code.analyze', 'result' => $evidence],
+        ];
+    }
+
+    private function readGithubFile(
+        Request $request,
+        Proyecto $project,
+        string $path,
+        NexusToolRegistry $tools
+    ): \App\Nexus\NexusToolResult {
+        return $tools->execute(
+            'nexus.github.inspect',
+            [
+                'operation' => 'file',
+                'project_id' => $project->id,
+                'path' => $path,
+            ],
+            new NexusToolContext(
+                user: $request->user(),
+                source: 'legacy_chat',
+                confirmed: true,
+                grantedPermissions: ['nexus.read'],
+                projectId: $project->id,
+                toolName: 'nexus.github.inspect',
+            )
+        );
+    }
+
+    private function requiresCodeAnalysis(string $input): bool
+    {
+        return $this->hasApproximateTerm($this->normalizeInstruction($input), [
+            'analiza', 'analizar', 'completamente', 'responsabilidad', 'metodos',
+            'métodos', 'clase', 'modelo', 'relaciones', 'descubrir', 'utiliza',
+        ]);
+    }
+
+    private function isNarrativeEvidenceQuery(string $input): bool
+    {
+        $text = $this->normalizeInstruction($input);
+
+        return in_array($this->repositoryIntent($input)['intent'], [
+            'functionality_flow',
+            'method_analysis',
+            'relation_analysis',
+        ], true) || (
+            $this->hasApproximateTerm($text, ['relacion']) &&
+            ! $this->hasApproximatePhrase($text, ['por que', 'porque'])
+        ) || $this->hasApproximateTerm($text, ['ocurre']);
+    }
+
+    private function requiresModelDiscovery(string $input): bool
+    {
+        $text = $this->normalizeInstruction($input);
+
+        return $this->hasApproximateTerm($text, [
+            'modelo', 'relacionado', 'relaciones', 'utiliza', 'localiza', 'descubr',
+        ]);
+    }
+
+    private function requestedMethodName(string $input): ?string
+    {
+        $rawInput = $input;
+        $input = $this->normalizeInstruction($input);
+        if (preg_match('/\b[A-Za-z_][A-Za-z0-9_]*Controller\s*@\s*([A-Za-z_][A-Za-z0-9_]*)\b/iu', $rawInput, $explicitMatch) === 1) {
+            return $explicitMatch[1];
+        }
+        if (preg_match(
+            '/(?:\bmetodo\s+(?:el\s+|la\s+)?|\bfuncion\s+(?:de\s+)?|\bexplicame\s+(?:(?:el|la)\s+)?(?:metodo\s+)?|\bexplica\s+(?:(?:el|la)\s+)?(?:metodo\s+)?)([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\s*\))?/iu',
+            $input,
+            $matches
+        ) !== 1) {
+            if (preg_match('/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)/u', $input, $matches) !== 1
+                && preg_match('/\b(?:Controller|controller)\s*@\s*([A-Za-z_][A-Za-z0-9_]*)\b/u', $input, $matches) !== 1
+                && preg_match('/\b(?:index|store|show|update|destroy)\s+de\s+(?:proyectos|proyecto)\b/iu', $input, $matches) !== 1) {
+                return null;
+            }
+        }
+
+        $method = $matches[1] ?? null;
+        return in_array(mb_strtolower($method ?? ''), ['como', 'que', 'qué', 'para', 'cuando', 'cuando'], true)
+            ? null
+            : $method;
+    }
+
+    private function requestedControllerName(string $input): ?string
+    {
+        if (preg_match('/\b([A-Za-z_][A-Za-z0-9_]*Controller)\s*@\s*[A-Za-z_][A-Za-z0-9_]*/i', $input, $matches) === 1) {
+            return $matches[1];
+        }
+
+        $text = $this->normalizeInstruction($input);
+        if ($this->hasApproximateTerm($text, ['proyecto', 'proyectos'])
+            && $this->requestedMethodName($input) !== null) {
+            return 'ProyectoController';
+        }
+
+        return null;
+    }
+
+    private function requestedRelationName(string $input): ?string
+    {
+        if (preg_match('/\b(?:relaci[oó]n|relaciones)\s+(?:existe\s+)?(?:entre\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+y\s+([A-Za-z_][A-Za-z0-9_]*)/iu', $input, $matches) === 1) {
+            return strtolower($matches[1]) === 'proyecto' ? $matches[2] : $matches[1];
+        }
+        if (preg_match('/\b(?:con|sus)\s+(tareas|bugs|actualizaciones|secciones|integracionGithub)\b/iu', $input, $matches) === 1) {
+            return $matches[1];
+        }
+        return null;
+    }
+
+    private function analyzeRepositoryMethodContent(string $path, string $content, string $method): array
+    {
+        $analysis = $this->analyzeRepositoryContent($path, $content);
+        $body = $this->methodBody($content, $method);
+        $analysis['requested_method'] = $method;
+        $analysis['method_found'] = $body !== null;
+        $analysis['methods'] = $body === null ? [] : [$method];
+        $analysis['method_content'] = $body;
+        $analysis['method_symbols'] = $body === null
+            ? []
+            : $this->symbolsUsedInMethod($body);
+
+        return $analysis;
+    }
+
+    private function methodBody(string $content, string $method): ?string
+    {
+        if (preg_match(
+            '/\bfunction\s+'.preg_quote($method, '/').'\s*\([^)]*\)[^{]*\{/i',
+            $content,
+            $match,
+            PREG_OFFSET_CAPTURE
+        ) !== 1) {
+            return null;
+        }
+
+        $start = $match[0][1] + strlen($match[0][0]) - 1;
+        $depth = 0;
+        $length = strlen($content);
+        for ($index = $start; $index < $length; $index++) {
+            if ($content[$index] === '{') {
+                $depth++;
+            } elseif ($content[$index] === '}') {
+                $depth--;
+                if ($depth === 0) {
+                    return substr($content, $start + 1, $index - $start - 1);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function symbolsUsedInMethod(string $content): array
+    {
+        preg_match_all(
+            '/\b([A-Z][A-Za-z0-9_]*)\s*::\s*[A-Za-z_][A-Za-z0-9_]*/',
+            $content,
+            $staticCalls
+        );
+        preg_match_all(
+            '/\$[A-Za-z_][A-Za-z0-9_]*\s*->\s*([A-Za-z_][A-Za-z0-9_]*)/',
+            $content,
+            $instanceCalls
+        );
+
+        return [
+            'static_calls' => array_values(array_unique($staticCalls[1] ?? [])),
+            'instance_calls' => array_values(array_unique($instanceCalls[1] ?? [])),
+        ];
+    }
+
+    private function analyzeRepositoryContent(string $path, string $content): array
+    {
+        $analysis = [
+            'path' => $path,
+            'language' => strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php' ? 'PHP' : strtoupper(pathinfo($path, PATHINFO_EXTENSION)),
+            'classes' => [],
+            'methods' => [],
+            'imports' => [],
+            'model_relations' => [],
+            'references' => [],
+        ];
+
+        if ($analysis['language'] !== 'PHP') {
+            return $analysis;
+        }
+
+        preg_match_all('/\b(class|interface|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)/', $content, $classes, PREG_SET_ORDER);
+        preg_match_all('/\b(?:public|protected|private)?\s*(?:static\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/', $content, $methods);
+        preg_match_all('/^\s*use\s+([^;]+);/m', $content, $imports);
+        preg_match_all('/\b(?:new|extends|implements|belongsTo|hasMany|hasOne|morphMany)\s*\(?\s*([A-Za-z_][A-Za-z0-9_\\\\]*)?/', $content, $references);
+
+        $analysis['classes'] = array_map(
+            fn (array $match): array => ['kind' => $match[1], 'name' => $match[2]],
+            $classes
+        );
+        $analysis['methods'] = array_values(array_unique($methods[1] ?? []));
+        $analysis['imports'] = array_values(array_unique(array_map('trim', $imports[1] ?? [])));
+        $analysis['references'] = array_values(array_unique(array_filter($references[1] ?? [])));
+        $analysis['model_relations'] = array_values(array_filter(
+            $analysis['references'],
+            fn (string $reference): bool => preg_match('/^(?:[A-Z][A-Za-z0-9_\\\\]*|[A-Z][A-Za-z0-9_]*)$/', $reference) === 1
+        ));
+
+        return $analysis;
+    }
+
+    private function addRelatedModelEvidence(
+        Request $request,
+        Proyecto $project,
+        NexusToolRegistry $tools,
+        string $content,
+        array $analysis,
+        ?string $requestedModel = null
+    ): array {
+        preg_match_all('/\buse\s+App\\\\Models\\\\([A-Za-z_][A-Za-z0-9_]*)\s*;/', $content, $matches);
+        $imports = array_values(array_unique($matches[1] ?? []));
+        $methodSymbols = $analysis['method_symbols']['static_calls'] ?? [];
+        $usedModels = array_values(array_intersect($imports, $methodSymbols));
+        $model = $requestedModel && in_array($requestedModel, $imports, true)
+            ? $requestedModel
+            : ($usedModels[0] ?? null);
+
+        if (! $model) {
+            return $analysis + ['related_model' => null];
+        }
+
+        $modelPath = 'app/Models/'.$model.'.php';
+        $modelResult = $this->readGithubFile($request, $project, $modelPath, $tools);
+        $modelEvidence = $modelResult->toArray();
+        $modelContent = data_get($modelEvidence, 'data.decoded_content');
+        $modelAnalysis = is_string($modelContent)
+            ? $this->analyzeRepositoryContent($modelPath, $modelContent)
+            : null;
+        if (is_array($modelAnalysis)) {
+            $modelAnalysis['source_content'] = $modelContent;
+        }
+
+        return $analysis + [
+            'related_model' => [
+                'path' => $modelPath,
+                'result' => $modelEvidence,
+                'analysis' => $modelAnalysis,
+            ],
+        ];
+    }
+
+    private function formatRepositoryAnalysisEvidence(
+        string $repository,
+        string $path,
+        array $analysis,
+        string $content
+    ): string {
+        $classes = collect($analysis['classes'] ?? [])
+            ->map(fn (array $class): string => $class['name'])
+            ->implode(', ');
+        $methods = collect($analysis['methods'] ?? [])->implode(', ');
+        $imports = collect($analysis['imports'] ?? [])->take(12)->implode(', ');
+        $message = "Análisis completo de {$repository}/{$path}.\n\n".
+            "Clases: ".($classes ?: 'no encontradas').".\n".
+            "Métodos reales: ".($methods ?: 'no encontrados').".\n".
+            "Imports: ".($imports ?: 'no encontrados').".\n";
+
+        if (isset($analysis['requested_method'])) {
+            $method = $analysis['requested_method'];
+            $methodStatus = ($analysis['method_found'] ?? false) ? 'encontrado' : 'no encontrado';
+            $staticCalls = collect(data_get($analysis, 'method_symbols.static_calls', []))->implode(', ');
+            $instanceCalls = collect(data_get($analysis, 'method_symbols.instance_calls', []))->implode(', ');
+            $message = "Análisis del método {$method}() de {$repository}/{$path}.\n\n".
+                "Método {$method}(): {$methodStatus}.\n".
+                "Clases usadas mediante llamadas estáticas: ".($staticCalls ?: 'ninguna').".\n".
+                "Métodos llamados sobre instancias: ".($instanceCalls ?: 'ninguno').".\n";
+        }
+
+        $related = $analysis['related_model'] ?? null;
+        if (is_array($related)) {
+            $relatedAnalysis = $related['analysis'] ?? [];
+            $relatedClasses = collect($relatedAnalysis['classes'] ?? [])->pluck('name')->implode(', ');
+            $relationDefinitions = $this->relationDefinitions($relatedAnalysis['source_content'] ?? '');
+            $methodRelations = $this->methodRelations($analysis['method_content'] ?? '');
+            $loadedRelations = $this->methodLoadedRelations($analysis['method_content'] ?? '');
+            $usedRelations = array_values(array_intersect(array_keys($relationDefinitions), $methodRelations));
+            $unusedRelations = array_values(array_diff(array_keys($relationDefinitions), $usedRelations));
+            $requestedMethod = $analysis['requested_method'] ?? 'el método';
+            $message .= "\nModelo relacionado: {$related['path']}.\n".
+                "Clase del modelo: ".($relatedClasses ?: 'no encontrada').".\n".
+                "Relaciones utilizadas por {$requestedMethod}: ".
+                ($usedRelations ? implode(', ', $usedRelations) : 'ninguna').".\n".
+                "Relaciones existentes pero no utilizadas: ".
+                ($unusedRelations ? implode(', ', $unusedRelations) : 'ninguna').".\n";
+            foreach ($usedRelations as $relation) {
+                $definition = $relationDefinitions[$relation];
+                $message .= "- {$relation}: {$definition['relation']} → {$definition['model']}; ".
+                    (in_array($relation, $loadedRelations, true) ? 'cargada mediante load().' : 'no cargada mediante load().').
+                    ' '.(preg_match('/\$[A-Za-z_][A-Za-z0-9_]*\s*->\s*'.preg_quote($relation, '/').'\b/', $analysis['method_content'] ?? '') === 1
+                        ? 'Accedida posteriormente.' : 'No se accede posteriormente.')."\n";
+            }
+            $relatedContent = data_get($related, 'result.data.decoded_content');
+            if (is_string($relatedContent)) {
+                $relatedLines = collect(preg_split('/\R/', $relatedContent) ?: [])
+                    ->take(80)
+                    ->map(fn (string $line, int $index): string => sprintf('%d: %s', $index + 1, $line))
+                    ->implode("\n");
+                $message .= "\nEvidencia real de {$repository}/{$related['path']}:\n\n{$relatedLines}\n";
+            }
+        }
+
+        $lines = collect(preg_split('/\R/', $content) ?: [])
+            ->take(120)
+            ->map(fn (string $line, int $index): string => sprintf('%d: %s', $index + 1, $line))
+            ->implode("\n");
+
+        return $message."\nEvidencia real de {$repository}/{$path}:\n\n{$lines}";
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function relationDefinitions(string $content): array
+    {
+        $definitions = [];
+        if ($content === '') {
+            return $definitions;
+        }
+
+        preg_match_all(
+            '/(?:(?:public|protected|private|static)\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)[^{]*\{(?:(?!\n\s*(?:(?:public|protected|private|static)\s+)?function\b).)*?\b(belongsTo|hasMany|hasOne|morphMany)\s*\(\s*([A-Za-z_][A-Za-z0-9_\\\\]*)?/is',
+            $content,
+            $matches,
+            PREG_SET_ORDER
+        );
+        foreach ($matches as $match) {
+            $definitions[$match[1]] = [
+                'relation' => $match[2],
+                'model' => $match[3] ?? 'modelo no especificado',
+            ];
+        }
+
+        return $definitions;
+    }
+
+    /** @return array<int, string> */
+    private function methodLoadedRelations(string $content): array
+    {
+        if ($content === '') {
+            return [];
+        }
+
+        $loaded = [];
+        preg_match_all('/->load\s*\(\s*([\'"])([^\'"]+)\1\s*\)/', $content, $directLoads);
+        $loaded = array_merge($loaded, $directLoads[2] ?? []);
+
+        preg_match_all('/\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\[([^\]]*)\]/s', $content, $assignments, PREG_SET_ORDER);
+        foreach ($assignments as $assignment) {
+            if (preg_match('/->load\s*\(\s*\$'.preg_quote($assignment[1], '/').'\s*\)/', $content) === 1) {
+                preg_match_all('/[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/', $assignment[2], $names);
+                $loaded = array_merge($loaded, $names[1] ?? []);
+            }
+        }
+
+        return array_values(array_unique($loaded));
+    }
+
+    /** @return array<int, string> */
+    private function methodRelations(string $content): array
+    {
+        if ($content === '') {
+            return [];
+        }
+
+        $relations = [];
+        preg_match_all('/->load\s*\(\s*([\'"])([^\'"]+)\1\s*\)/', $content, $directLoads);
+        $relations = array_merge($relations, $directLoads[2] ?? []);
+
+        preg_match_all('/\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\[([^\]]*)\]/s', $content, $assignments, PREG_SET_ORDER);
+        foreach ($assignments as $assignment) {
+            if (preg_match('/->load\s*\(\s*\$'.preg_quote($assignment[1], '/').'\s*\)/', $content) === 1) {
+                preg_match_all('/[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/', $assignment[2], $names);
+                $relations = array_merge($relations, $names[1] ?? []);
+            }
+        }
+
+        preg_match_all(
+            '/\$[A-Za-z_][A-Za-z0-9_]*\s*->\s*([A-Za-z_][A-Za-z0-9_]*)/',
+            $content,
+            $accesses
+        );
+        $relations = array_merge($relations, $accesses[1] ?? []);
+
+        return array_values(array_unique(array_filter(
+            $relations,
+            fn (string $relation): bool => ! in_array($relation, ['load', 'first', 'get', 'paginate'], true)
+        )));
+    }
+
+    private function resolveRepositoryProject(Request $request, string $input): ?Proyecto
+    {
+        if ($request->input('project_id')) {
+            return Proyecto::with('integracionGithub')->find($request->integer('project_id'));
+        }
+
+        $mentioned = $this->projectMentionedInText($this->normalizeInstruction($input));
+        if ($mentioned?->integracionGithub) {
+            return $mentioned;
+        }
+
+        $projects = Proyecto::with('integracionGithub')
+            ->whereHas('integracionGithub')
+            ->get();
+
+        return $projects->count() === 1 ? $projects->first() : null;
+    }
+
+    private function repositoryEvidencePath(string $input): string
+    {
+        if (preg_match(
+            '/(?:^|\s)((?:app|routes|config|database)\/[A-Za-z0-9._\/-]+\.[A-Za-z0-9]+)\b/iu',
+            $input,
+            $matches
+        ) === 1) {
+            return $matches[1];
+        }
+
+        if (preg_match(
+            '/(?:archivo|file)\s+([A-Za-z0-9][A-Za-z0-9._\/-]*\.[A-Za-z0-9]+)\b/iu',
+            $input,
+            $matches
+        ) === 1) {
+            $path = trim($matches[1], " \t\n\r\0\x0B.,:;!?\"'");
+            if ($path !== '' && ! str_contains($path, '..') && ! str_starts_with($path, '/')) {
+                return $path;
+            }
+        }
+
+        if (preg_match('/\bmodelo\s+([A-Za-z_][A-Za-z0-9_]*)/iu', $input, $matches) === 1) {
+            return 'app/Models/'.$matches[1].'.php';
+        }
+
+        if (preg_match('/\bcontrolador\s+([A-Za-z_][A-Za-z0-9_]*)/iu', $input, $matches) === 1) {
+            return 'app/Http/Controllers/'.$matches[1].'.php';
+        }
+
+        if ($this->hasApproximateTerm($this->normalizeInstruction($input), ['rutas', 'routes'])) {
+            return 'routes/web.php';
+        }
+
+        foreach (['composer.json', 'package.json', 'README.md'] as $path) {
+            if (str_contains(mb_strtolower($input), mb_strtolower($path))) {
+                return $path;
+            }
+        }
+
+        return 'composer.json';
+    }
+
+    /** @return array<int, string> */
+    private function repositoryEvidencePaths(string $input): array
+    {
+        $intent = $this->repositoryIntent($input);
+        if ($intent['intent'] === 'method_analysis') {
+            $controller = $intent['target'] ? explode('@', (string) $intent['target'])[0] : null;
+            return [$controller === 'ProyectoController'
+                ? 'app/Http/Controllers/ProyectoController.php'
+                : $this->repositoryEvidencePath($input)];
+        }
+        if ($intent['intent'] === 'relation_analysis') {
+            return ['app/Models/Proyecto.php'];
+        }
+
+        $candidates = [];
+        if (preg_match_all(
+            '/((?:app|routes|config|database)\/[A-Za-z0-9._\/-]+\.[A-Za-z0-9]+)\b/iu',
+            $input,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        ) > 0) {
+            foreach ($matches[1] as [$path, $position]) {
+                $candidates[] = [$position, $path];
+            }
+        }
+
+        if (preg_match_all(
+            '/(?:archivo|file)\s+([A-Za-z0-9][A-Za-z0-9._\/-]*\.[A-Za-z0-9]+)\b/iu',
+            $input,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        ) > 0) {
+            foreach ($matches[1] as [$path, $position]) {
+                $candidates[] = [
+                    $position,
+                    trim($path, " \t\n\r\0\x0B.,:;!?\"'"),
+                ];
+            }
+        }
+
+        foreach (['composer.json', 'package.json', 'README.md'] as $path) {
+            $position = mb_stripos($input, $path);
+            if ($position !== false) {
+                $candidates[] = [$position, $path];
+            }
+        }
+
+        usort($candidates, fn (array $left, array $right): int => $left[0] <=> $right[0]);
+        $paths = array_values(array_unique(array_filter(
+            array_column($candidates, 1),
+            fn (string $path): bool => $path !== ''
+                && ! str_contains($path, '..')
+                && ! str_starts_with($path, '/')
+        )));
+
+        if ($paths !== []) {
+            return $paths;
+        }
+
+        if ($intent['intent'] === 'functionality_flow'
+            && $this->hasApproximateTerm($this->normalizeInstruction($input), [
+                'proyectos', 'proyecto', 'dashboard/proyectos', 'ProyectoController',
+            ])) {
+            $text = $this->normalizeInstruction($input);
+            $paths = ['routes/web.php', 'app/Http/Controllers/ProyectoController.php'];
+            if ($this->hasApproximateTerm($text, ['crear', 'creacion', 'creación', 'guardar', 'falla', 'fallar'])) {
+                $paths[] = 'app/Models/Proyecto.php';
+            }
+
+            return $paths;
+        }
+
+        return [$this->repositoryEvidencePath($input)];
+    }
+
+    private function synthesizeRepositoryExplanation(string $input, array $results): string
+    {
+        $intent = $this->repositoryIntent($input);
+        $sources = collect($results)
+            ->filter(fn (array $result): bool => is_string($result['content'] ?? null))
+            ->keyBy('path');
+        $routes = (string) ($sources->get('routes/web.php')['content'] ?? '');
+        $controller = (string) ($sources->get('app/Http/Controllers/ProyectoController.php')['content'] ?? '');
+        if ($controller === '' && $intent['intent'] === 'method_analysis') {
+            $controller = (string) ($sources->first()['content'] ?? '');
+        }
+        $requestedMethod = $this->requestedMethodName($input);
+        if ($requestedMethod === null && $this->hasApproximateTerm($this->normalizeInstruction($input), [
+            'crear', 'creacion', 'creación', 'guardar', 'falla', 'fallar',
+        ])) {
+            $requestedMethod = 'store';
+        }
+        $method = $this->methodBody($controller, $requestedMethod ?: 'index');
+        $paragraphs = [];
+        $evidence = [];
+
+        if ($intent['intent'] === 'functionality_flow' && $routes !== '' && preg_match(
+            '/Route::(?:get|post)\s*\(\s*[\'"]\/dashboard\/proyectos[\'"][^;]*ProyectoController::class(?:\s*,\s*[\'"](?:index|store)[\'"]|\s*\])?/',
+            $routes
+        ) === 1) {
+            $paragraphs[] = 'La funcionalidad de proyectos se consulta mediante GET /dashboard/proyectos, asociado con ProyectoController@index. También expone la operación de creación mediante POST /dashboard/proyectos y ProyectoController@store.';
+            $evidence[] = 'routes/web.php';
+        }
+
+        if ($controller !== '' && $method !== null) {
+            $facts = [];
+            if ($intent['intent'] === 'method_analysis') {
+                $facts[] = "El método {$requestedMethod}() es el objetivo principal de esta consulta y se analiza directamente desde su implementación.";
+            }
+            if (preg_match('/\$proyectos\s*=\s*Proyecto::latest\(\)->paginate\((\d+)\)/', $method, $match) === 1) {
+                $facts[] = "index() obtiene los proyectos mediante Proyecto::latest()->paginate({$match[1]}).";
+            }
+            if (str_contains($method, '$proyectos->first()')) {
+                $facts[] = 'Después toma el primer proyecto de la colección paginada.';
+            }
+            if (preg_match('/\$proyecto->load\s*\(\s*\$relaciones\s*\)/', $method) === 1
+                || str_contains($method, "['secciones', 'integracionGithub']")) {
+                $facts[] = 'Prepara y carga relaciones del proyecto mediante load(), incluyendo secciones e integración de GitHub.';
+            }
+            if (preg_match('/Schema::hasTable/', $method) === 1) {
+                $facts[] = 'Comprueba la existencia de tablas relacionadas antes de preparar tareas, bugs y actualizaciones.';
+            }
+            if (preg_match('/\$proyecto->(tareas|bugs|actualizaciones|secciones|integracionGithub)/', $method) === 1) {
+                $facts[] = 'Utiliza las relaciones cargadas para preparar los datos que se muestran en la vista.';
+            }
+            if (str_contains($method, 'obtenerEstadisticas($proyecto)')) {
+                $facts[] = 'Obtiene estadísticas mediante obtenerEstadisticas($proyecto).';
+            }
+            if ($requestedMethod === 'store') {
+                if (preg_match('/\$request->validate\s*\(/', $method) === 1) {
+                    $facts[] = 'store() valida los datos recibidos antes de persistir el proyecto.';
+                }
+                if (str_contains($method, 'Proyecto::create($validado)')) {
+                    $facts[] = 'Persiste el proyecto mediante Proyecto::create($validado) dentro de una transacción.';
+                }
+                if (str_contains($method, "route('proyectos.index')")) {
+                    $facts[] = 'Después redirige a proyectos.index con un mensaje de éxito.';
+                }
+            }
+            if (preg_match('/return\s+view\([\'"]admin\.proyectos[\'"]\s*,\s*compact\(([^)]+)\)/', $method, $match) === 1) {
+                $facts[] = 'Finalmente devuelve la vista admin.proyectos con los datos preparados mediante compact().';
+            }
+            if ($facts !== []) {
+                $paragraphs[] = implode(' ', $facts);
+                $evidence[] = 'app/Http/Controllers/ProyectoController.php';
+            }
+        }
+
+        foreach ($sources as $path => $result) {
+            $source = $result['content'] ?? '';
+            if (! is_string($source) || $source === '' || $path === 'app/Http/Controllers/ProyectoController.php') {
+                continue;
+            }
+
+            if (preg_match('/class\s+([A-Za-z_][A-Za-z0-9_]*)/', $source, $classMatch) === 1
+                && preg_match_all('/function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/', $source, $methodMatches) > 0) {
+                $names = array_values(array_unique($methodMatches[1]));
+                $paragraphs[] = "La fuente {$path} define la clase {$classMatch[1]} y los métodos ".implode(', ', $names).". Esto confirma la superficie de implementación disponible, pero no permite inferir comportamiento fuera de esos métodos.";
+                $evidence[] = $path;
+            }
+
+            $relations = $this->relationDefinitions($source);
+            if ($relations !== []) {
+                $descriptions = [];
+                foreach ($relations as $name => $definition) {
+                    $descriptions[] = "{$name} ({$definition['relation']} hacia {$definition['model']})";
+                }
+                $paragraphs[] = "En {$path}, las relaciones declaradas son ".implode(', ', $descriptions).". La declaración confirma cómo se modelan, pero no demuestra que todas se utilicen en el método consultado.";
+                $evidence[] = $path;
+            }
+        }
+
+        if ($paragraphs === []) {
+            return 'No hay evidencia suficiente para reconstruir el flujo solicitado. Las fuentes consultadas no contienen una relación verificable entre los componentes mencionados.';
+        }
+
+        if ($intent['intent'] === 'diagnosis') {
+            $paragraphs[] = 'Diagnóstico: la evidencia consultada permite confirmar el flujo de validación, persistencia y redirección, pero no demuestra por sí sola un fallo concreto en producción.';
+            $paragraphs[] = 'Hipótesis no confirmada: el problema podría estar en la validación, la transacción, la recuperación posterior o la presentación; se requiere evidencia de ejecución o del estado de la base de datos para confirmar cuál ocurre.';
+        }
+
+        $uniqueEvidence = array_values(array_unique($evidence));
+
+        return implode("\n\n", $paragraphs).
+            "\n\nHechos confirmados por código. Evidencia: ".implode(', ', $uniqueEvidence).
+            ".\n\nFuentes utilizadas: ".implode(', ', $uniqueEvidence).'.';
+    }
+
+    /**
+     * Builds a query-scoped evidence graph without carrying state between requests.
+     *
+     * @return array<string, mixed>
+     */
+    private function buildEvidenceGraph(string $input, array $results): array
+    {
+        $facts = [];
+        $relationships = [];
+        $supporting = [];
+        $contradicting = [];
+        $inferences = [];
+        $files = [];
+
+        foreach ($results as $result) {
+            $path = $result['path'] ?? null;
+            $content = $result['content'] ?? null;
+            if (! is_string($path) || ! is_string($content) || $content === '') {
+                continue;
+            }
+
+            $files[] = $path;
+            if (preg_match_all(
+                '/Route::(get|post|put|patch|delete)\s*\(\s*[\'"]([^\'"]+)[\'"][^;]*?([A-Za-z_][A-Za-z0-9_]*Controller)::class\s*,\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/s',
+                $content,
+                $matches,
+                PREG_SET_ORDER
+            ) > 0) {
+                foreach ($matches as $match) {
+                    $route = strtoupper($match[1]).' '.$match[2];
+                    $controller = $match[3].'@'.$match[4];
+                    $facts[] = $this->evidenceFact($route, $path, 'route', $route);
+                    $facts[] = $this->evidenceFact($controller, $path, 'symbol', $controller);
+                    $relationships[] = $this->evidenceRelationship($route, 'maps_to', $controller, $path);
+                    $supporting[$controller][] = $path;
+                }
+            }
+
+            if (preg_match_all('/([A-Za-z_][A-Za-z0-9_]*)(?:::|::class)/', $content, $symbols) > 0) {
+                foreach (array_unique($symbols[1]) as $symbol) {
+                    if (in_array($symbol, ['Route', 'Schema', 'DB', 'Request'], true)) {
+                        continue;
+                    }
+                    $facts[] = $this->evidenceFact($symbol, $path, 'symbol', $symbol);
+                }
+            }
+
+            if (preg_match_all(
+                '/\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(/',
+                $content,
+                $calls,
+                PREG_SET_ORDER
+            ) > 0) {
+                foreach ($calls as $call) {
+                    $target = $call[2].'::'.$call[3].'()';
+                    $facts[] = $this->evidenceFact($target, $path, 'operation', $target);
+                    if ($call[2] === 'ProyectoController' || $call[2] === 'Proyecto') {
+                        $relationships[] = $this->evidenceRelationship($call[2], 'uses', $target, $path);
+                    }
+                }
+            }
+
+            foreach ($this->relationDefinitions($content) as $name => $definition) {
+                $relation = "{$name} ({$definition['relation']} -> {$definition['model']})";
+                $facts[] = $this->evidenceFact($relation, $path, 'relation', $name);
+                $relationships[] = $this->evidenceRelationship(
+                    pathinfo($path, PATHINFO_FILENAME),
+                    'declares',
+                    $name,
+                    $path
+                );
+            }
+        }
+
+        $facts = collect($facts)->unique(fn (array $fact): string => $fact['key'])->values()->all();
+        $relationships = collect($relationships)
+            ->unique(fn (array $relationship): string => implode('|', [
+                $relationship['from'], $relationship['type'], $relationship['to'],
+            ]))
+            ->values()
+            ->all();
+        $files = array_values(array_unique($files));
+
+        foreach ($relationships as $relationship) {
+            $supporting[$relationship['to']] = array_values(array_unique(array_merge(
+                $supporting[$relationship['to']] ?? [],
+                [$relationship['source']]
+            )));
+        }
+
+        $routeTargets = collect($relationships)
+            ->filter(fn (array $relationship): bool => $relationship['type'] === 'maps_to')
+            ->groupBy('from');
+        foreach ($routeTargets as $route => $targets) {
+            $targetNames = $targets->pluck('to')->unique()->values()->all();
+            if (count($targetNames) > 1) {
+                $contradicting[] = [
+                    'claim' => "{$route} tiene destinos distintos",
+                    'evidence' => $targetNames,
+                    'confidence' => 0.98,
+                ];
+            }
+        }
+
+        if ($facts !== [] && $relationships !== []) {
+            $inferences[] = [
+                'claim' => 'La evidencia permite reconstruir una cadena entre componentes del repositorio.',
+                'supports' => array_values(array_unique(array_map(
+                    fn (array $relationship): string => $relationship['from'].' -> '.$relationship['to'],
+                    $relationships
+                ))),
+                'confidence' => count($files) > 1 ? 0.9 : 0.75,
+            ];
+        }
+
+        if ($facts === []) {
+            $inferences[] = [
+                'claim' => 'No se puede confirmar una relación entre componentes con las fuentes disponibles.',
+                'supports' => [],
+                'confidence' => 0.95,
+            ];
+        }
+
+        return [
+            'query' => $input,
+            'files' => $files,
+            'facts' => $facts,
+            'relationships' => $relationships,
+            'supporting_evidence' => $supporting,
+            'contradicting_evidence' => $contradicting,
+            'inferences' => $inferences,
+            'confidence' => $contradicting !== [] ? 0.4 : ($facts !== [] ? 0.9 : 0.1),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function evidenceFact(string $value, string $path, string $type, string $symbol): array
+    {
+        return [
+            'key' => $type.':'.$value.':'.$path,
+            'type' => 'fact',
+            'value' => $value,
+            'source' => $path,
+            'file' => $path,
+            'symbol' => $symbol,
+            'confidence' => 0.98,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function evidenceRelationship(string $from, string $type, string $to, string $source): array
+    {
+        return [
+            'from' => $from,
+            'type' => $type,
+            'to' => $to,
+            'source' => $source,
+            'confidence' => 0.95,
+        ];
+    }
+
+    private function requestedModelClass(string $input): ?string
+    {
+        if (preg_match(
+            '/\bmodelo\s+([A-Z][A-Za-z0-9_]*)\b/iu',
+            $input,
+            $matches
+        ) !== 1) {
+            return null;
+        }
+
+        return ucfirst($matches[1]);
+    }
+
+    private function repositoryPartsFromUrl(string $url): ?array
+    {
+        $parts = parse_url($url);
+        $segments = explode('/', trim($parts['path'] ?? '', '/'));
+
+        if (($parts['host'] ?? null) !== 'github.com' || count($segments) !== 2) {
+            return null;
+        }
+
+        $repo = preg_replace('/\.git$/', '', $segments[1]);
+
+        return $repo ? ['owner' => $segments[0], 'repo' => $repo] : null;
+    }
+
+    private function formatRepositoryFileEvidence(string $repository, string $path, mixed $content, array $evidence): string
+    {
+        if (! is_string($content)) {
+            return "Encontré {$path} en {$repository}, pero GitHub no devolvió contenido legible.";
+        }
+
+        $summary = $this->extractRepositoryFindings($path, $content);
+
+        $lines = collect(preg_split('/\R/', $content) ?: [])
+            ->take(80)
+            ->map(fn (string $line, int $index): string => sprintf('%d: %s', $index + 1, $line))
+            ->implode("\n");
+
+        return $summary."Evidencia real de {$repository}/{$path}:\n\n{$lines}";
+    }
+
+    private function extractRepositoryFindings(string $path, string $content): string
+    {
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $findings = [];
+
+        if (strtolower(basename($path)) === 'composer.json') {
+            $manifest = json_decode($content, true);
+            $manifest = is_array($manifest) ? $manifest : [];
+            $dependencies = collect(array_merge(
+                is_array($manifest['require'] ?? null) ? $manifest['require'] : [],
+                is_array($manifest['require-dev'] ?? null) ? $manifest['require-dev'] : []
+            ));
+            $framework = $manifest['require']['laravel/framework'] ?? null;
+            if (is_string($framework)) {
+                $findings[] = "Framework: Laravel {$framework}.";
+            }
+            if ($dependencies->isNotEmpty()) {
+                $findings[] = 'Dependencias reales: '.$dependencies
+                    ->map(fn ($version, $name): string => "{$name} {$version}")
+                    ->take(10)
+                    ->implode(', ').'.';
+            }
+        }
+
+        if ($extension === 'php') {
+            preg_match('/\bclass\s+([A-Za-z_][A-Za-z0-9_]*)/', $content, $class);
+            preg_match_all('/\b(?:public|protected|private)?\s*(?:static\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/', $content, $methods);
+            if (isset($class[1])) {
+                $findings[] = "Clase: {$class[1]}.";
+            }
+            if (($methods[1] ?? []) !== []) {
+                $findings[] = 'Métodos reales: '.implode(', ', array_values(array_unique($methods[1]))).'.';
+            }
+            preg_match_all('/\buse\s+([A-Za-z_][A-Za-z0-9_\\\\]+)/', $content, $imports);
+            if (($imports[1] ?? []) !== []) {
+                $findings[] = 'Dependencias/imports: '.implode(', ', array_slice(array_unique($imports[1]), 0, 12)).'.';
+            }
+        }
+
+        if (preg_match_all(
+            '/Route::(get|post|put|patch|delete|match|any)\s*\(\s*[\'"]([^\'"]+)[\'"]/i',
+            $content,
+            $routes,
+            PREG_SET_ORDER
+        ) > 0) {
+            $findings[] = 'Rutas reales: '.collect($routes)
+                ->take(20)
+                ->map(fn (array $route): string => strtoupper($route[1])." {$route[2]}")
+                ->implode(', ').'.';
+        }
+
+        return $findings === [] ? '' : implode("\n", $findings)."\n\n";
+    }
+
+    private function formatLocalCodeEvidence(string $path, array $evidence): string
+    {
+        $data = $evidence['data'] ?? [];
+        $technologies = implode(', ', data_get($data, 'technologies.detected', [])) ?: 'no determinadas';
+        $dependencies = collect(data_get($data, 'dependencies', []))
+            ->flatten()
+            ->take(10)
+            ->map(fn ($dependency): string => is_scalar($dependency) ? (string) $dependency : json_encode($dependency))
+            ->implode(', ');
+
+        return "Análisis local de {$path} completado con evidencia del proyecto.\n\n".
+            "Tecnologías: {$technologies}\n".
+            "Dependencias detectadas: ".($dependencies ?: 'no determinadas')."\n".
+            "Archivos inspeccionados: ".count($data['files'] ?? []);
     }
 
     public function clear(Request $request, NexusMemoryService $memory)
@@ -234,6 +1729,16 @@ class AsistenteController extends Controller
         }
 
         if ($this->isCasualConversation($text)) {
+            if ($this->isNexusCapabilitiesInstruction($text)) {
+                return [
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => $this->nexusCapabilitiesMessage(),
+                    ],
+                    'navigation' => null,
+                ];
+            }
+
             return [
                 'message' => [
                     'role' => 'assistant',
@@ -244,6 +1749,16 @@ class AsistenteController extends Controller
         }
 
         if ($this->isHelpInstruction($text)) {
+            if ($this->isNexusCapabilitiesInstruction($text)) {
+                return [
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => $this->nexusCapabilitiesMessage(),
+                    ],
+                    'navigation' => null,
+                ];
+            }
+
             return [
                 'message' => [
                     'role' => 'assistant',

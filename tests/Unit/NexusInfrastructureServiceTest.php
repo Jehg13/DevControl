@@ -14,9 +14,7 @@ class NexusInfrastructureServiceTest extends TestCase
     use RefreshDatabase;
     public function test_it_observes_health_and_records_basic_anomalies(): void
     {
-        Http::fake([
-            'https://app.example.test/health' => Http::response([], 503),
-        ]);
+        Http::fake(fn () => Http::response([], 503));
 
         $infrastructure = NexusInfrastructure::create([
             'name' => 'Producción',
@@ -29,10 +27,10 @@ class NexusInfrastructureServiceTest extends TestCase
                 'disk_percent' => 92,
             ],
             'services' => [['name' => 'nginx', 'status' => 'stopped']],
-            'applications' => [['name' => 'DevControl', 'url' => 'https://app.example.test/health']],
+            'applications' => [['name' => 'DevControl', 'url' => 'https://example.com/health']],
             'databases' => [['engine' => 'mysql', 'status' => 'available']],
-            'domains' => ['https://app.example.test'],
-            'ssl' => [['domain' => 'app.example.test', 'expires_at' => now()->addDays(5)->toISOString()]],
+            'domains' => ['https://example.com'],
+            'ssl' => [['domain' => 'example.com', 'expires_at' => now()->addDays(5)->toISOString()]],
         ]);
 
         $result = app(NexusInfrastructureService::class)->inspect(
@@ -50,14 +48,14 @@ class NexusInfrastructureServiceTest extends TestCase
     public function test_it_reports_unreachable_servers_without_throwing(): void
     {
         Http::fake([
-            'https://offline.example.test/*' => function () {
+            'https://example.com/offline/*' => function () {
                 throw new ConnectionException('offline');
             },
         ]);
 
         $infrastructure = NexusInfrastructure::create([
             'name' => 'Servidor offline',
-            'applications' => [['url' => 'https://offline.example.test/health']],
+            'applications' => [['url' => 'https://example.com/offline/health']],
         ]);
 
         $result = app(NexusInfrastructureService::class)->inspect(infrastructureId: $infrastructure->id);

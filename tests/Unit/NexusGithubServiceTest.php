@@ -58,4 +58,36 @@ class NexusGithubServiceTest extends TestCase
             $this->assertSame('github_rate_limited', $exception->errorCode);
         }
     }
+
+    public function test_file_reads_are_isolated_by_path_and_do_not_reuse_previous_content(): void
+    {
+        Http::fake([
+            'https://api.github.com/repos/acme/demo/contents/composer.json*' => Http::response([
+                'path' => 'composer.json',
+                'content' => base64_encode('{"require":{"laravel/framework":"^10.10"}}'),
+            ]),
+            'https://api.github.com/repos/acme/demo/contents/prueba-inexistente-nexus.json*' => Http::response([
+                'message' => 'Not Found',
+            ], 404),
+        ]);
+
+        $service = app(NexusGithubService::class);
+        $composer = $service->file(null, 'composer.json', 'acme', 'demo');
+
+        $this->assertSame(
+            '{"require":{"laravel/framework":"^10.10"}}',
+            $composer['decoded_content']
+        );
+
+        try {
+            $service->file(null, 'prueba-inexistente-nexus.json', 'acme', 'demo');
+            $this->fail('Expected missing file exception.');
+        } catch (NexusGithubException $exception) {
+            $this->assertSame('github_not_found', $exception->errorCode);
+        }
+
+        $composerAgain = $service->file(null, 'composer.json', 'acme', 'demo');
+        $this->assertSame($composer['decoded_content'], $composerAgain['decoded_content']);
+        Http::assertSentCount(3);
+    }
 }

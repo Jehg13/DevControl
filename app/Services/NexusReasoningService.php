@@ -18,6 +18,7 @@ class NexusReasoningService
     public function __construct(
         private readonly NexusModel $model,
         private readonly NexusToolRegistry $tools,
+        private readonly ?NexusSecurityBoundary $security = null,
     ) {
     }
 
@@ -67,6 +68,7 @@ class NexusReasoningService
 
         $requiresConfirmation = $response->requiresConfirmation;
 
+        $allowedTools = array_column($this->tools->definitions(), 'name');
         foreach ($response->toolCalls as $call) {
             if (! is_array($call) || ! isset($call['name'], $call['arguments'])) {
                 throw new NexusModelException(
@@ -82,6 +84,11 @@ class NexusReasoningService
                     'invalid_tool_arguments'
                 );
             }
+            ($this->security ?? new NexusSecurityBoundary())->assertToolCall(
+                (string) $call['name'],
+                $call['arguments'],
+                $allowedTools
+            );
 
             $requiresConfirmation = $requiresConfirmation || $tool->requiresConfirmation();
         }

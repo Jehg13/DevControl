@@ -70,9 +70,9 @@ class NexusProjectUnderstandingService
 
         if ($projectId !== null && $userId !== null) {
             $conversation = $this->memory->conversation('project-understanding:'.$projectId, $userId);
-            $this->memory->remember(
+            $this->memory->createTechnicalMemory(
                 $conversation,
-                'knowledge',
+                'architecture',
                 sprintf(
                     'El proyecto %s utiliza %s%s y tiene los módulos: %s.',
                     $understanding['name'],
@@ -80,13 +80,18 @@ class NexusProjectUnderstandingService
                     $understanding['framework'] ? ' con '.$understanding['framework'] : '',
                     implode(', ', array_keys($understanding['modules']))
                 ),
+                $projectId,
+                'project_understanding',
+                array_values(array_filter([
+                    ...collect($evidence['files'] ?? [])->pluck('path')->all(),
+                    $evidence['fingerprint'] ? 'fingerprint:'.$evidence['fingerprint'] : null,
+                ])),
                 85,
+                'validated',
                 [
-                    'project_id' => $projectId,
-                    'source' => 'project_understanding',
                     'importance' => 75,
                     'fingerprint' => $evidence['fingerprint'],
-                ]
+                ],
             );
         }
 
@@ -161,6 +166,7 @@ class NexusProjectUnderstandingService
         $entryPoints = $this->entryPoints($knownPaths, $type);
         $architecture = $this->architecture($type, $modules, $routes);
         $relations = $this->relations($evidence, $routes, $files);
+        $architectureMap = $this->architectureMap($evidence, $knownPaths, $files, $routes, $relations);
 
         return [
             'name' => $project?->nombre ?: basename(base_path($sourcePath)) ?: config('app.name'),
@@ -182,6 +188,7 @@ class NexusProjectUnderstandingService
             'dependencies' => $evidence['dependencies'] ?? [],
             'database' => $this->database($knownPaths, $evidence['dependencies'] ?? []),
             'architecture' => $architecture,
+            'architecture_map' => $architectureMap,
             'relationships' => $relations,
             'authentication' => $this->authentication($knownPaths, $relations),
             'detected_features' => $this->features($knownPaths, $evidence),
@@ -190,6 +197,8 @@ class NexusProjectUnderstandingService
                 'files' => $evidence['files'] ?? [],
                 'relevant_files' => $evidence['relevant_files'] ?? [],
                 'symbols' => $evidence['symbols'] ?? [],
+                'route_bindings' => $evidence['route_bindings'] ?? [],
+                'relationships' => $evidence['relationships'] ?? [],
                 'technologies' => $evidence['technologies'] ?? [],
             ],
             'github' => $this->githubEvidence($project),
@@ -258,9 +267,12 @@ class NexusProjectUnderstandingService
             'controllers' => ['app/Http/Controllers/', 'controller'],
             'models' => ['app/Models/', 'model'],
             'services' => ['app/Services/', 'service'],
+            'requests' => ['app/Http/Requests/', 'request'],
             'components' => ['resources/js/components/', 'components/', '.vue'],
             'views' => ['resources/views/', 'views/', '.blade.php'],
             'migrations' => ['database/migrations/', 'migration'],
+            'jobs' => ['app/Jobs/', 'job'],
+            'events' => ['app/Events/', 'event'],
             'configuration' => ['config/', '.env.example', 'composer.json', 'package.json'],
         ];
         $result = array_fill_keys(array_keys($groups), []);
@@ -344,6 +356,156 @@ class NexusProjectUnderstandingService
             'request_flow' => $routes !== [] ? ['route', 'controller', 'service', 'model', 'database'] : [],
             'confidence' => $type === 'generic' ? 35 : 80,
         ];
+    }
+
+    private function architectureMap(
+        array $evidence,
+        array $knownPaths,
+        array $files,
+        array $routes,
+        array $relations,
+    ): array {
+        $components = [];
+        foreach ([
+            'routes' => $routes,
+            'controllers' => $files['controllers'],
+            'requests' => $files['requests'],
+            'services' => $files['services'],
+            'models' => $files['models'],
+            'views' => $files['views'],
+            'configuration' => $files['configuration'],
+            'migrations' => $files['migrations'],
+            'jobs' => $files['jobs'],
+            'events' => $files['events'],
+        ] as $type => $paths) {
+            $components[] = [
+                'type' => $type,
+                'status' => $paths === [] ? 'not_found' : 'found',
+                'files' => array_values(array_unique($paths)),
+            ];
+        }
+
+        $edges = [];
+        foreach ($relations as $relation) {
+            $edges[] = [
+                'from' => $relation['from'],
+                'to' => $relation['to'],
+                'type' => $relation['type'],
+                'certainty' => 'direct',
+                'source' => $relation['file'] ?? $relation['from'],
+            ];
+        }
+
+        $routeBindings = $evidence['route_bindings'] ?? [];
+        foreach ($routeBindings as $binding) {
+            $controller = (string) ($binding['controller'] ?? '');
+            if ($controller === '') {
+                continue;
+            }
+            $controllerPath = $this->pathForClass($controller, $files['controllers']);
+            if ($controllerPath === null) {
+                continue;
+            }
+            if ($files['services'] !== []) {
+                $edges[] = [
+                    'from' => $controllerPath,
+                    'to' => 'app/Services/',
+                    'type' => 'may_delegate_to',
+                    'certainty' => 'inference',
+                    'source' => 'Laravel controller/service convention; no direct call evidence was collected.',
+                ];
+            }
+            if ($files['models'] !== []) {
+                $edges[] = [
+                    'from' => $controllerPath,
+                    'to' => 'app/Models/',
+                    'type' => 'may_use',
+                    'certainty' => 'inference',
+                    'source' => 'Laravel controller/model convention; verify with method-level source evidence.',
+                ];
+            }
+            if ($files['views'] !== []) {
+                $edges[] = [
+                    'from' => $controllerPath,
+                    'to' => 'resources/views/',
+                    'type' => 'may_render',
+                    'certainty' => 'inference',
+                    'source' => 'Laravel controller/view convention; view call was not parsed at this level.',
+                ];
+            }
+        }
+
+        if ($files['models'] !== [] && $files['migrations'] !== []) {
+            $edges[] = [
+                'from' => 'app/Models/',
+                'to' => 'database/migrations/',
+                'type' => 'maps_to_persistence',
+                'certainty' => 'inference',
+                'source' => 'Model and migration layers both exist; table mapping requires model/migration content.',
+            ];
+        }
+
+        $narrative = $this->architectureNarrative($routeBindings, $files, $edges);
+
+        return [
+            'components' => $components,
+            'edges' => $edges,
+            'narrative' => $narrative,
+            'read_only' => true,
+        ];
+    }
+
+    private function pathForClass(string $class, array $paths): ?string
+    {
+        $name = class_basename(str_replace('\\\\', '\\', $class));
+        foreach ($paths as $path) {
+            if (str_ends_with($path, '/'.$name.'.php') || str_ends_with($path, '\\'.$name.'.php')) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    private function architectureNarrative(array $routeBindings, array $files, array $edges): string
+    {
+        if ($routeBindings === []) {
+            return 'No se encontraron bindings de rutas suficientes para reconstruir un flujo HTTP.';
+        }
+
+        $first = $routeBindings[0];
+        $route = $first['route'] ?? 'ruta no identificada';
+        $controller = $first['controller'] ?? 'controller no encontrado';
+        $action = $first['action'] ?? 'acción no identificada';
+        $parts = ["La ruta {$route} entra por {$controller}@{$action}, relación directa confirmada por la declaración de rutas."];
+
+        if ($files['requests'] !== []) {
+            $parts[] = 'Existen Form Requests disponibles; su uso concreto por ese controller no fue confirmado en esta representación.';
+        } else {
+            $parts[] = 'No se encontraron Form Requests en el repositorio analizado.';
+        }
+        if ($files['services'] !== []) {
+            $parts[] = 'La capa de servicios existe, pero su conexión concreta con esta acción queda como inferencia hasta analizar el cuerpo del método.';
+        } else {
+            $parts[] = 'No se encontraron servicios de aplicación.';
+        }
+        if ($files['models'] !== []) {
+            $parts[] = 'La capa de modelos existe y representa el acceso al dominio; el mapeo exacto a una entidad requiere evidencia del controller o servicio.';
+        } else {
+            $parts[] = 'No se encontraron modelos.';
+        }
+        if ($files['migrations'] !== []) {
+            $parts[] = 'Las migraciones proporcionan la evidencia disponible de persistencia.';
+        } else {
+            $parts[] = 'No se encontraron migraciones.';
+        }
+        if ($files['views'] !== []) {
+            $parts[] = 'Hay vistas disponibles como capa de presentación, aunque esta reconstrucción no confirma cuál renderiza la acción.';
+        } else {
+            $parts[] = 'No se encontraron vistas.';
+        }
+
+        return implode(' ', $parts);
     }
 
     private function relations(array $evidence, array $routes, array $files): array

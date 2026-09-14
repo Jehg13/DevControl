@@ -127,8 +127,12 @@ class NexusInfrastructureService
         ), fn ($url) => is_string($url) && filter_var($url, FILTER_VALIDATE_URL)));
 
         foreach ($urls as $url) {
+            if (! $this->isAllowedEndpoint($url)) {
+                $snapshot['checks'][] = ['type' => 'http', 'target' => $url, 'status' => 'blocked', 'error' => 'endpoint_not_allowed'];
+                continue;
+            }
             try {
-                $response = Http::timeout(max(1, min(30, $timeout)))->get($url);
+                $response = Http::timeout(max(1, min(30, $timeout)))->withOptions(['allow_redirects' => false])->get($url);
                 $snapshot['checks'][] = [
                     'type' => 'http',
                     'target' => $url,
@@ -165,6 +169,25 @@ class NexusInfrastructureService
         $snapshot['status'] = $snapshot['anomalies'] === [] ? 'healthy' : 'degraded';
 
         return $snapshot;
+    }
+
+    private function isAllowedEndpoint(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (! in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true)
+            || empty($parts['host'])
+            || ! empty($parts['user'])
+            || ! empty($parts['pass'])) {
+            return false;
+        }
+
+        $host = strtolower($parts['host']);
+        if ($host === 'localhost' || filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            return false;
+        }
+
+        $ip = filter_var($host, FILTER_VALIDATE_IP) ? $host : gethostbyname($host);
+        return $ip !== $host && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
     }
 
     private function recordEvents(NexusInfrastructure $infrastructure, array $anomalies): void

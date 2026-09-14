@@ -35,6 +35,7 @@ return [
         'ca_bundle' => env('GITHUB_CA_BUNDLE'),
         'token' => env('GITHUB_TOKEN'),
         'git_binary' => env('GIT_BINARY'),
+        'import_max_files' => (int) env('GITHUB_IMPORT_MAX_FILES', 20),
     ],
 
     'alerts' => [

@@ -15,6 +15,12 @@ class Kernel extends ConsoleKernel
         $schedule->command('nexus:scan')
             ->everyFiveMinutes()
             ->withoutOverlapping();
+        $schedule->command('nexus:proactive')
+            ->everyFiveMinutes()
+            ->withoutOverlapping();
+        $schedule->command('nexus:github-analyze --batch=25')
+            ->everyMinute()
+            ->withoutOverlapping();
     }
 
     /**

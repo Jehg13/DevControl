@@ -1,4 +1,7 @@
 import json
+import hashlib
+import hmac
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,12 +17,30 @@ class NexusTrainingTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+    def _approve(self, directory: str) -> None:
+        digest = hashlib.sha256()
+        for path in sorted(Path(directory).glob("*.jsonl")):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        Path(directory, "approval.json").write_text(json.dumps({
+            "format": "nexus-dataset-approval-v1",
+            "dataset_sha256": digest.hexdigest(),
+            "approved_by": "external-test-authority",
+            "signature": hmac.new(
+                os.environ["NEXUS_DATASET_APPROVAL_KEY"].encode(),
+                f"{digest.hexdigest()}:external-test-authority".encode(),
+                hashlib.sha256,
+            ).hexdigest(),
+        }), encoding="utf-8")
+
     def test_end_to_end_training_writes_metrics_and_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset = Path(directory) / "dataset"
             output = Path(directory) / "run"
             dataset.mkdir()
+            os.environ["NEXUS_DATASET_APPROVAL_KEY"] = "test-key"
             self._dataset(str(dataset))
+            self._approve(str(dataset))
             summary = train(
                 dataset,
                 output,
@@ -38,8 +59,10 @@ class NexusTrainingTest(unittest.TestCase):
             other = Path(directory) / "other"
             dataset.mkdir()
             other.mkdir()
+            os.environ["NEXUS_DATASET_APPROVAL_KEY"] = "test-key"
             self._dataset(str(dataset))
             self._dataset(str(other))
+            self._approve(str(dataset))
             Path(other, "training-00000.jsonl").write_text(
                 json.dumps({"input_ids": [7, 7, 7]}) + "\n", encoding="utf-8"
             )

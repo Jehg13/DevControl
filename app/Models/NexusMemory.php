@@ -23,12 +23,14 @@ class NexusMemory extends Model
         'metadata',
         'last_used_at',
         'last_confirmed_at',
+        'validated_at',
     ];
 
     protected $casts = [
         'metadata' => 'array',
         'last_used_at' => 'datetime',
         'last_confirmed_at' => 'datetime',
+        'validated_at' => 'datetime',
     ];
 
     public function usuario(): BelongsTo

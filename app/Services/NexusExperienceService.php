@@ -3,11 +3,132 @@
 namespace App\Services;
 
 use App\Models\NexusExperience;
+use App\Models\NexusLearningRecord;
 use App\Models\NexusRun;
 use Illuminate\Support\Collection;
 
 class NexusExperienceService
 {
+    public function __construct(
+        private readonly NexusKnowledgeGraphService $knowledge,
+    ) {
+    }
+
+    public function evaluateOutcome(
+        NexusExperience $experience,
+        bool $success,
+        string $result,
+        array $errors = [],
+        array $contradictions = [],
+    ): NexusExperience {
+        $status = $contradictions !== []
+            ? 'contradictory'
+            : ($success ? 'evaluated_success' : 'evaluated_failure');
+
+        $experience->update([
+            'status' => $status,
+            'result' => array_merge($experience->result ?? [], [
+                'outcome' => $result,
+                'success' => $success,
+            ]),
+            'errors' => array_values(array_filter(array_merge($experience->errors ?? [], $errors))),
+            'metadata' => array_merge($experience->metadata ?? [], [
+                'evaluation' => [
+                    'status' => $status,
+                    'success' => $success,
+                    'contradictions' => $contradictions,
+                    'evaluated_at' => now()->toIso8601String(),
+                ],
+            ]),
+        ]);
+
+        return $experience->fresh();
+    }
+
+    public function createLearningCandidate(NexusExperience $experience): ?NexusLearningRecord
+    {
+        $evaluation = data_get($experience->metadata, 'evaluation', []);
+        if (! in_array($evaluation['status'] ?? null, ['evaluated_success', 'evaluated_failure'], true)) {
+            return null;
+        }
+
+        return NexusLearningRecord::create([
+            'learning_key' => 'experience:'.$experience->id,
+            'learning_type' => 'experience',
+            'status' => 'observed',
+            'pattern' => $evaluation['status'],
+            'observation' => [
+                'problem' => $experience->problem,
+                'solution' => $experience->solution,
+                'lesson' => $experience->lesson,
+            ],
+            'evidence' => [
+                'experience_id' => $experience->id,
+                'context' => $experience->context,
+                'tools_used' => $experience->tools_used,
+                'result' => $experience->result,
+                'errors' => $experience->errors,
+            ],
+            'proposed_update' => [
+                'lesson' => $experience->lesson,
+                'strategy' => $experience->strategy,
+            ],
+            'confidence' => $experience->confidence,
+            'proyecto_id' => $experience->proyecto_id,
+            'source_type' => 'experience',
+            'source_id' => (string) $experience->id,
+        ]);
+    }
+
+    public function validateLearningCandidate(NexusLearningRecord $candidate, int $confidence = 80): NexusLearningRecord
+    {
+        if ($candidate->learning_type !== 'experience' || $candidate->status !== 'observed') {
+            throw new \InvalidArgumentException('Solo se pueden validar candidatos de experiencia observados.');
+        }
+
+        $candidate->update([
+            'status' => 'validated',
+            'confidence' => max(0, min(100, $confidence)),
+            'validated_at' => now(),
+        ]);
+
+        return $candidate->fresh();
+    }
+
+    public function promoteValidatedLearning(NexusLearningRecord $candidate): ?array
+    {
+        if ($candidate->learning_type !== 'experience' || $candidate->status !== 'validated') {
+            return null;
+        }
+
+        $lesson = (string) data_get($candidate->proposed_update, 'lesson');
+        $claim = $this->knowledge->fact(
+            ['type' => 'experience', 'key' => 'experience:'.$candidate->source_id, 'label' => 'Experience '.$candidate->source_id],
+            'validated_lesson',
+            $lesson,
+            'FACT',
+            'experience',
+            (string) $candidate->source_id,
+            $candidate->proyecto_id,
+            $candidate->confidence,
+            null,
+            ['learning_record_id' => $candidate->id],
+        );
+
+        return [
+            'status' => 'knowledge_candidate',
+            'validated' => true,
+            'project_id' => $candidate->proyecto_id,
+            'source' => [
+                'type' => $candidate->source_type,
+                'id' => $candidate->source_id,
+            ],
+            'evidence' => $candidate->evidence,
+            'lesson' => data_get($candidate->proposed_update, 'lesson'),
+            'confidence' => $candidate->confidence,
+            'knowledge_claim_id' => $claim->id,
+        ];
+    }
     public function remember(array $experience, ?int $userId = null, ?int $runId = null): ?NexusExperience
     {
         $problem = $this->clean((string) ($experience['problem'] ?? ''));

@@ -18,4 +18,20 @@ class NexusCodeAnalysisServiceTest extends TestCase
         $this->assertIsArray($result['route_bindings']);
         $this->assertTrue($result['read_only']);
     }
+
+    public function test_analysis_accepts_a_single_php_file_path(): void
+    {
+        $result = app(NexusCodeAnalysisService::class)->analyze(
+            null,
+            'app/Http/Controllers/ProyectoController.php',
+            false
+        );
+
+        $this->assertCount(1, $result['files']);
+        $this->assertSame(
+            'app/Http/Controllers/ProyectoController.php',
+            $result['files'][0]['path']
+        );
+        $this->assertNotEmpty($result['symbols'][0]['functions']);
+    }
 }

@@ -60,7 +60,10 @@ class GithubInspectTool extends AbstractNexusTool
             if ($parameters['operation'] === 'file' && empty($parameters['path'])) {
                 return NexusToolResult::failure('validation_failed', 'La operación file requiere path.');
             }
-            $project = isset($parameters['project_id']) ? Proyecto::findOrFail($parameters['project_id']) : null;
+            $project = null;
+            if (isset($parameters['project_id'])) {
+                $project = Proyecto::find($parameters['project_id']);
+            }
             $operation = $parameters['operation'];
             $args = [$project, $parameters['owner'] ?? null, $parameters['repo'] ?? null];
             $data = match ($operation) {

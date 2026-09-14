@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import platform
@@ -182,21 +183,14 @@ def train(
     config: TrainingConfig | None = None,
     resume: str | Path | None = None,
     *,
-    require_approval: bool = False,
+    require_approval: bool = True,
 ) -> dict:
     config = config or TrainingConfig()
     if config.epochs < 1 or config.learning_rate <= 0:
         raise ValueError("epochs must be positive and learning_rate must be positive")
-    if require_approval:
-        approval = Path(dataset_path) / "approval.json"
-        if not approval.is_file():
-            raise ValueError("training requires an explicitly approved dataset (approval.json)")
-        try:
-            approval_value = json.loads(approval.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            raise ValueError("dataset approval marker is invalid") from error
-        if approval_value.get("format") != "nexus-dataset-approval-v1":
-            raise ValueError("unsupported dataset approval marker")
+    approval = Path(dataset_path) / "approval.json"
+    if require_approval and not approval.is_file():
+        raise ValueError("training requires an explicitly approved dataset (approval.json)")
     train_examples = _read_examples(dataset_path, "training")
     validation_examples = _read_examples(dataset_path, "validation")
     if not train_examples:
@@ -204,6 +198,17 @@ def train(
     if config.max_samples is not None:
         train_examples = train_examples[:config.max_samples]
     dataset_hash = _dataset_hash(dataset_path)
+    if require_approval:
+        try:
+            approval_value = json.loads(approval.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError("dataset approval marker is invalid") from error
+        if (approval_value.get("format") != "nexus-dataset-approval-v1"
+                or approval_value.get("dataset_sha256") != dataset_hash
+                or not approval_value.get("approved_by")
+                or not approval_value.get("signature")
+                or not _valid_approval_signature(approval_value, dataset_hash)):
+            raise ValueError("dataset approval does not match the exact approved dataset")
     output = Path(output_path)
     output.mkdir(parents=True, exist_ok=True)
     tracemalloc.start()
@@ -263,3 +268,15 @@ def train(
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
+
+
+def _valid_approval_signature(approval: dict, dataset_hash: str) -> bool:
+    """Validate approval using a key held outside the dataset directory."""
+    import os
+
+    key = os.environ.get("NEXUS_DATASET_APPROVAL_KEY")
+    if not key:
+        return False
+    message = f"{dataset_hash}:{approval['approved_by']}"
+    expected = hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(str(approval.get("signature")), expected)

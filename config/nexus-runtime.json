@@ -1,0 +1,18 @@
+{
+  "format": "nexus-runtime-manifest-v1",
+  "versions": {
+    "Nexus AI v0.1": {
+      "checkpoint": "storage/app/nexus-model/latest.json",
+      "tokenizer": "storage/app/nexus-model/tokenizer.json",
+      "max_context_tokens": 2048,
+      "max_new_tokens": 128,
+      "temperature": 0.7,
+      "top_k": 40,
+      "top_p": 0.9,
+      "timeout_seconds": 30,
+      "logits_cache_size": 1024,
+      "quantization": "none",
+      "tools": []
+    }
+  }
+}

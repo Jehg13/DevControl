@@ -11,6 +11,20 @@ return [
         'timeout' => (int) env('NEXUS_AI_TIMEOUT', 30),
         'max_steps' => (int) env('NEXUS_AI_MAX_STEPS', 5),
     ],
+    'local' => [
+        'python' => env('NEXUS_LOCAL_PYTHON', 'python'),
+        'script' => env('NEXUS_LOCAL_SCRIPT', 'scripts/nexus_infer.py'),
+        'checkpoint' => env('NEXUS_LOCAL_CHECKPOINT', 'storage/app/nexus-model/latest.json'),
+        'tokenizer' => env('NEXUS_LOCAL_TOKENIZER', 'storage/app/nexus-model/tokenizer.json'),
+        'max_context_tokens' => (int) env('NEXUS_LOCAL_MAX_CONTEXT_TOKENS', 2048),
+        'max_new_tokens' => (int) env('NEXUS_LOCAL_MAX_NEW_TOKENS', 128),
+        'temperature' => (float) env('NEXUS_LOCAL_TEMPERATURE', 0.7),
+        'top_k' => (int) env('NEXUS_LOCAL_TOP_K', 40),
+        'top_p' => (float) env('NEXUS_LOCAL_TOP_P', 0.9),
+        'timeout' => (int) env('NEXUS_LOCAL_TIMEOUT', 30),
+        'logits_cache_size' => (int) env('NEXUS_LOCAL_LOGITS_CACHE_SIZE', 1024),
+        'quantization' => env('NEXUS_LOCAL_QUANTIZATION', 'none'),
+    ],
     'security' => [
         'mode' => env('NEXUS_SECURITY_MODE', 'safe'),
         'allow_system' => (bool) env('NEXUS_SECURITY_ALLOW_SYSTEM', true),
@@ -56,6 +70,12 @@ return [
         'relevant_memories' => (int) env('NEXUS_MEMORY_RELEVANT_MEMORIES', 8),
         'automatic_min_confidence' => (int) env('NEXUS_MEMORY_AUTOMATIC_MIN_CONFIDENCE', 75),
         'deduplication_threshold' => (float) env('NEXUS_MEMORY_DEDUPLICATION_THRESHOLD', 0.75),
+    ],
+    'proactive' => [
+        'enabled' => (bool) env('NEXUS_PROACTIVE_ENABLED', true),
+        'cooldown_minutes' => (int) env('NEXUS_PROACTIVE_COOLDOWN_MINUTES', 60),
+        'high_priority_repeat' => (int) env('NEXUS_PROACTIVE_HIGH_PRIORITY_REPEAT', 3),
+        'minimum_severity' => (int) env('NEXUS_PROACTIVE_MINIMUM_SEVERITY', 2),
     ],
     'modules' => [
         'proyectos' => ['label' => 'Proyectos', 'route' => 'proyectos.index'],

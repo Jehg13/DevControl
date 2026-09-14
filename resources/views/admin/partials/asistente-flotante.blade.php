@@ -23,6 +23,10 @@
                 <p id="assistantWidgetEmpty" class="py-10 text-center text-xs leading-relaxed text-gray-600">Escribe una instrucción para navegar o revisar DevControl.</p>
             @endif
         </div>
+        <div id="assistantWidgetProgress" class="hidden border-t border-white/10 px-3 py-2" aria-live="polite">
+            <p id="assistantWidgetProgressMessage" class="font-mono2 text-[9px] text-gray-400"></p>
+            <p id="assistantWidgetProgressSteps" class="mt-1 font-mono2 text-[9px] text-gray-600"></p>
+        </div>
         <form id="assistantWidgetForm" class="border-t border-white/10 p-3">
             @csrf
             <div class="flex gap-2">
@@ -49,6 +53,16 @@
     const send = document.getElementById('assistantWidgetSend');
     const messages = document.getElementById('assistantWidgetMessages');
     const empty = document.getElementById('assistantWidgetEmpty');
+    const progressPanel = document.getElementById('assistantWidgetProgress');
+    const progressMessage = document.getElementById('assistantWidgetProgressMessage');
+    const progressSteps = document.getElementById('assistantWidgetProgressSteps');
+    let progressPoll = null;
+
+    function renderProgress(progress) {
+        progressPanel.classList.remove('hidden');
+        progressMessage.textContent = progress.message || 'Nexus está procesando la consulta.';
+        progressSteps.textContent = `${(progress.completed_steps || []).length}/5 etapas · ${progress.progress || 0}%`;
+    }
 
     const addMessage = (role, content) => {
         empty?.remove();
@@ -79,19 +93,33 @@
         input.value = '';
         send.disabled = true;
         send.textContent = '...';
+        const progressToken = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        renderProgress({message: 'Consulta recibida.', progress: 0, completed_steps: []});
+        progressPoll = window.setInterval(async () => {
+            try {
+                const progressResponse = await fetch(`{{ route('asistente.progress') }}?progress_token=${encodeURIComponent(progressToken)}`, {headers: {'Accept': 'application/json'}});
+                if (progressResponse.ok) renderProgress(await progressResponse.json());
+            } catch (error) {
+                // The message response remains authoritative.
+            }
+        }, 500);
         try {
             const response = await fetch('{{ route('asistente.message') }}', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', 'X-CSRF-TOKEN': '{{ csrf_token() }}', 'Accept': 'application/json'},
-                body: JSON.stringify({message: command})
+                body: JSON.stringify({message: command, progress_token: progressToken})
             });
             if (!response.ok) throw new Error('assistant request failed');
             const data = await response.json();
+            if (data.research) renderProgress(data.research);
             addMessage('assistant', data.message.content);
             if (data.navigation) window.location.href = data.navigation;
         } catch (error) {
+            renderProgress({message: 'La investigación falló antes de completar la respuesta.', progress: 0, completed_steps: []});
             addMessage('assistant', 'No pude procesar la instrucción. Inténtalo nuevamente.');
         } finally {
+            window.clearInterval(progressPoll);
+            progressPoll = null;
             send.disabled = false;
             send.textContent = 'Enviar';
         }
