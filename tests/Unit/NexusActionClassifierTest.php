@@ -35,7 +35,9 @@ class NexusActionClassifierTest extends TestCase
 
         foreach ([
             'Ejecuta las pruebas del proyecto',
+            'Quiero ejecutar las pruebas',
             'Corre PHPUnit',
+            'Quiero que corras los tests del proyecto',
             'Ejecuta los tests',
             'Ejecuta las pruebas Nexus',
         ] as $message) {
@@ -43,6 +45,23 @@ class NexusActionClassifierTest extends TestCase
 
             $this->assertSame('test_execution', $action['action'], $message);
             $this->assertSame(['nexus.read'], $action['requested_permissions']);
+        }
+    }
+
+    public function test_test_execution_investigations_are_not_executed_as_actions(): void
+    {
+        $classifier = app(NexusActionClassifier::class);
+
+        foreach ([
+            '¿Por qué Nexus no detecta que quiero ejecutar las pruebas?',
+            'Investiga por qué no reconoce mis solicitudes para ejecutar pruebas.',
+            'Nexus no reconoce que quiero correr los tests.',
+            'Investiga por qué Nexus no detecta correctamente las solicitudes para ejecutar pruebas.',
+        ] as $message) {
+            $this->assertNull(
+                $classifier->classify(new NexusRuntimeRequest(message: $message)),
+                $message
+            );
         }
     }
 

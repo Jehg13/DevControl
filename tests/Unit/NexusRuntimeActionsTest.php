@@ -40,6 +40,38 @@ class NexusRuntimeActionsTest extends TestCase
         $this->assertSame('runtime_action', $response->source);
     }
 
+    public function test_test_execution_requests_are_actions_but_investigations_use_the_research_pipeline(): void
+    {
+        $classifier = new NexusActionClassifier();
+        $runtime = app(\App\Nexus\NexusRuntime::class);
+
+        foreach ([
+            'Ejecuta las pruebas.',
+            'Quiero ejecutar las pruebas.',
+            'Corre PHPUnit.',
+            'Quiero que corras los tests del proyecto.',
+        ] as $message) {
+            $action = $classifier->classify(new NexusRuntimeRequest(message: $message));
+            $this->assertSame('test_execution', $action['action'], $message);
+        }
+
+        foreach ([
+            '¿Por qué Nexus no detecta que quiero ejecutar las pruebas?',
+            'Investiga por qué no reconoce mis solicitudes para ejecutar pruebas.',
+            'Nexus no reconoce que quiero correr los tests.',
+        ] as $message) {
+            $response = $runtime->handle(new NexusRuntimeRequest(
+                message: $message,
+                projectId: 1,
+            ));
+
+            $this->assertSame('diagnosis', $response->intent, $message);
+            $this->assertNotContains('nexus.code.validate', $response->toolsUsed, $message);
+            $this->assertSame('intent_classification', $response->investigation['objective']['domain'], $message);
+            $this->assertSame('test_execution', $response->investigation['objective']['target'], $message);
+        }
+    }
+
     public function test_write_action_is_rejected_without_permission_and_never_reaches_tool_handler(): void
     {
         $tool = new class extends AbstractNexusTool

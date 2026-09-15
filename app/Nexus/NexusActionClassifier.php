@@ -29,6 +29,10 @@ final class NexusActionClassifier
             return null;
         }
 
+        if ($this->isTestExecutionInvestigation($text)) {
+            return null;
+        }
+
         if ($this->hasAny($text, ['diff de git', 'git diff', 'diferencias de git', 'diferencias del repositorio'])) {
             return $this->action('git_diff', 'repository', [], ['nexus.read'], false, false);
         }
@@ -47,7 +51,19 @@ final class NexusActionClassifier
             );
         }
 
-        if ($this->hasAny($text, ['ejecuta las pruebas', 'ejecuta los tests', 'corre phpunit', 'corre las pruebas', 'valida la implementacion', 'valida la implementacion'])) {
+        if ($this->hasAny($text, [
+            'ejecuta las pruebas',
+            'ejecuta los tests',
+            'quiero ejecutar las pruebas',
+            'quiero ejecutar los tests',
+            'quiero que corras los tests',
+            'quiero que corras las pruebas',
+            'corre phpunit',
+            'corre los tests',
+            'corre las pruebas',
+            'valida la implementacion',
+            'valida la implementación',
+        ])) {
             $suite = str_contains($text, 'phpunit') ? 'all' : (str_contains($text, 'nexus') ? 'nexus' : 'all');
 
             return $this->action('test_execution', 'repository', ['suite' => $suite], ['nexus.read'], false);
@@ -99,6 +115,21 @@ final class NexusActionClassifier
             || str_starts_with($text, 'porque ')
             || str_contains($text, 'como funciona')
             || str_contains($text, 'como funcionan');
+    }
+
+    private function isTestExecutionInvestigation(string $text): bool
+    {
+        return $this->hasAny($text, [
+            'investiga por que',
+            'investiga porque',
+            'por que nexus no detecta',
+            'porque nexus no detecta',
+            'no detecta que quiero ejecutar',
+            'no reconoce que quiero ejecutar',
+            'no reconoce mis solicitudes para ejecutar',
+            'no reconoce que quiero correr',
+            'no detecta correctamente las solicitudes para ejecutar',
+        ]);
     }
 
     private function commitMessage(string $message): string

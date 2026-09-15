@@ -160,6 +160,49 @@ class NexusRuntimeTest extends TestCase
         $this->assertStringNotContainsString('He revisado la comprensión del proyecto', $response->finalMessage);
     }
 
+    public function test_test_execution_investigation_preserves_its_objective_and_avoids_project_hypotheses(): void
+    {
+        $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(
+            message: 'Investiga por qué Nexus no detecta correctamente las solicitudes para ejecutar pruebas.',
+            projectId: 1,
+        ));
+
+        $objective = $response->investigation['objective'];
+        $this->assertSame('intent_classification', $objective['domain']);
+        $this->assertSame('test_execution', $objective['target']);
+        $this->assertStringContainsString('ejecución de pruebas', $objective['research_goal']);
+        $this->assertSame(
+            'Investiga por qué Nexus no detecta correctamente las solicitudes para ejecutar pruebas.',
+            $response->diagnosis['problem_observed']
+        );
+        $descriptions = collect($response->hypotheses)->pluck('description')->implode(' ');
+        $this->assertStringNotContainsString('proyecto no se guarda', strtolower($descriptions));
+        $this->assertStringNotContainsString('vista no muestra los proyectos', strtolower($descriptions));
+    }
+
+    public function test_project_view_investigation_keeps_a_different_objective_and_hypotheses(): void
+    {
+        $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(
+            message: 'Investiga por qué la vista de proyectos muestra el texto Proyectos y necesito cambiarlo a Mis proyectos.',
+            projectId: 1,
+        ));
+
+        $objective = $response->investigation['objective'];
+        $this->assertSame('project_view', $objective['domain']);
+        $this->assertSame('resources/views/admin/proyectos.blade.php', $objective['target']);
+        $this->assertStringContainsString('vista de proyectos', strtolower($objective['research_goal']));
+        $this->assertNotSame(
+            'intent_classification',
+            $response->diagnosis['context']['objective']['domain']
+        );
+        $this->assertSame(
+            'Investiga por qué la vista de proyectos muestra el texto Proyectos y necesito cambiarlo a Mis proyectos.',
+            $response->diagnosis['problem_observed']
+        );
+        $descriptions = collect($response->hypotheses)->pluck('description')->implode(' ');
+        $this->assertStringNotContainsString('proyecto no se guarda', strtolower($descriptions));
+    }
+
     public function test_diagnosis_performs_chained_autonomous_investigation_until_required_layers_are_found(): void
     {
         $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(

@@ -113,11 +113,11 @@ class NexusRuntime
             }
         }
 
-        $executionPlan = $this->buildExecutionPlan($request, $intentName);
+        $executionPlan = $this->buildExecutionPlan($request, $intent);
         $toolResults = [];
         $toolsUsed = [];
         $errors = [];
-        $investigation = $this->investigationPlan($intentName);
+        $investigation = $this->investigationPlan($intent);
         $context = new NexusToolContext(
             user: $request->user,
             source: 'runtime_gateway',
@@ -165,7 +165,7 @@ class NexusRuntime
             $investigatedCalls = [];
 
             while ($autonomousIterations < $maxAutonomousIterations) {
-                $call = $this->nextAutonomousDiagnosisCall($request, $toolResults, $investigatedCalls);
+                $call = $this->nextAutonomousDiagnosisCall($request, $intent, $toolResults, $investigatedCalls);
                 if ($call === null) {
                     break;
                 }
@@ -209,7 +209,7 @@ class NexusRuntime
         }
 
         $certainty = $this->determineCertainty($intentName, $toolResults, $errors);
-        $hypotheses = $this->buildHypotheses($request->message, $intentName, $toolResults, $errors);
+        $hypotheses = $this->buildHypotheses($request->message, $intent, $toolResults, $errors);
         $impact = $this->buildImpactAssessment($request->message, $intentName, $toolResults, $errors);
         $behavior = $this->buildBehaviorAnalysis($request->message, $intentName, $toolResults, $errors);
         $diagnosis = $this->buildDiagnosisReport($request->message, $intentName, $toolResults, $errors, $hypotheses);
@@ -394,53 +394,130 @@ class NexusRuntime
     private function classifyIntent(string $message): array
     {
         $text = $this->normalize($message);
+        $intent = 'general';
+        $confidence = 0.6;
 
         if (preg_match('/\bplanific\w*/iu', $message) === 1
             || $this->hasAny($text, ['como implementarías', 'cómo implementarías', 'como implementarias', 'cómo implementar', 'plan tecnico', 'plan técnico', 'que tendria que cambiar', 'qué tendría que cambiar'])) {
-            return ['intent' => 'planning', 'confidence' => 0.8];
+            $intent = 'planning';
+            $confidence = 0.8;
+        } elseif ($this->isGeneralDevControlQuestion($text)) {
+            $intent = 'general';
+            $confidence = 0.98;
+        } elseif ($this->hasAny($text, [
+            'no aparecen',
+            'no se muestran',
+            'no funciona',
+            'falla',
+            'fallar',
+            'problema',
+            'diagnostica',
+            'investiga por que',
+            'porque',
+            'no detecta',
+            'no reconoce',
+            'no identifica',
+            'podría fallar',
+        ])) {
+            $intent = 'diagnosis';
+            $confidence = 0.95;
+        } elseif ($this->hasAny($text, ['relacion', 'hasmany', 'belongsto', 'tareas', 'proyecto con sus tareas', 'relaciona proyecto con sus tareas'])) {
+            $intent = 'relation_analysis';
+            $confidence = 0.9;
+        } elseif ($this->isBehaviorQuestion($text)) {
+            $intent = 'behavior_analysis';
+            $confidence = 0.9;
+        } elseif ($this->hasAny($text, ['implementacion de index', 'implementación de index', 'index()', 'explícame la implementación'])) {
+            $intent = 'method_analysis';
+            $confidence = 0.9;
+        } elseif ($this->hasAny($text, ['como funciona', 'explica', 'describ', 'flujo', 'relaciona', 'relación', 'relaciones', 'funcionalidad de proyectos', 'que pasa cuando entro a proyectos', 'qué pasa cuando entro a proyectos'])) {
+            $intent = 'functionality_flow';
+            $confidence = 0.9;
+        } elseif ($this->hasAny($text, ['index paso a paso', '¿qué hace', 'qué hace', 'controlador@index', 'proyecto controller'])) {
+            $intent = 'method_analysis';
+            $confidence = 0.8;
+        } elseif ($this->hasAny($text, ['archivo inexistente', 'app/models/', 'proyectoxyz', 'qué hace app/', 'router'])) {
+            $intent = 'file_lookup';
+            $confidence = 0.8;
+        } elseif ($this->hasAny($text, ['impacto', 'afectará', 'afectado', 'si modifico', 'modifico proyecto'])) {
+            $intent = 'impact_analysis';
+            $confidence = 0.8;
+        } elseif ($this->hasAny($text, ['proyecto', 'proyectos', 'controller', 'controlador', 'ruta', 'routes', 'modelo', 'model'])) {
+            $intent = 'method_analysis';
+            $confidence = 0.8;
         }
 
-        if ($this->isGeneralDevControlQuestion($text)) {
-            return ['intent' => 'general', 'confidence' => 0.98];
+        return [
+            'intent' => $intent,
+            'confidence' => $confidence,
+            'objective' => $this->researchObjective($message, $intent, $confidence),
+        ];
+    }
+
+    /** @return array{research_goal: string, domain: string, target: string|null, requested_behavior: string, expected_question: string, constraints: array<int, string>, confidence: float} */
+    private function researchObjective(string $message, string $intent, float $confidence): array
+    {
+        $text = $this->normalize($message);
+        $isTestClassification = $this->hasAny($text, [
+            'ejecutar pruebas', 'ejecutar las pruebas', 'ejecutar tests', 'ejecutar los tests',
+            'ejecucion de pruebas', 'ejecución de pruebas',
+            'solicitudes para ejecutar', 'detecta correctamente las solicitudes', 'corre los tests',
+            'correr los tests', 'no reconoce que quiero correr', 'no reconoce mis solicitudes',
+            'no detecta que quiero ejecutar', 'no reconoce que quiero ejecutar',
+        ]);
+        $isProjectView = $this->hasAny($text, [
+            'vista de proyectos', 'muestra el texto proyectos', 'texto proyectos', 'mis proyectos',
+        ]);
+        $isProjectDiagnosis = $this->hasAny($text, [
+            'proyecto no', 'proyectos no', 'proyectos no aparecen', 'crear proyectos',
+            'guardar proyectos', 'persistencia de proyectos', 'listado de proyectos',
+        ]);
+
+        if ($isTestClassification) {
+            return [
+                'research_goal' => 'Determinar por qué las solicitudes de ejecución de pruebas no se clasifican correctamente.',
+                'domain' => 'intent_classification',
+                'target' => 'test_execution',
+                'requested_behavior' => 'Reconocer solicitudes de ejecución de pruebas y dirigirlas a test_execution.',
+                'expected_question' => '¿Dónde se pierde la intención de ejecutar pruebas y qué componente debe clasificarla?',
+                'constraints' => ['investigar sin modificar archivos', 'conservar el mensaje original'],
+                'confidence' => max($confidence, 0.95),
+            ];
         }
 
-        if ($this->hasAny($text, ['no aparecen', 'no se muestran', 'no funciona', 'falla', 'fallar', 'problema', 'diagnostica', 'investiga por que', 'porque', 'podría fallar'])) {
-            return ['intent' => 'diagnosis', 'confidence' => 0.95];
+        if ($isProjectView) {
+            return [
+                'research_goal' => 'Determinar dónde se define y renderiza el texto de la vista de proyectos.',
+                'domain' => 'project_view',
+                'target' => 'resources/views/admin/proyectos.blade.php',
+                'requested_behavior' => 'Mostrar el texto solicitado en la vista de proyectos.',
+                'expected_question' => '¿Qué archivo y flujo de presentación contienen el texto de proyectos?',
+                'constraints' => ['investigar sin modificar archivos', 'distinguir presentación de persistencia'],
+                'confidence' => max($confidence, 0.95),
+            ];
         }
 
-        if ($this->hasAny($text, ['relacion', 'hasmany', 'belongsTo', 'tareas', 'proyecto con sus tareas', 'relaciona proyecto con sus tareas'])) {
-            return ['intent' => 'relation_analysis', 'confidence' => 0.9];
+        if ($isProjectDiagnosis) {
+            return [
+                'research_goal' => 'Determinar por qué el flujo de proyectos no produce el resultado esperado.',
+                'domain' => 'project_lifecycle',
+                'target' => 'Proyecto',
+                'requested_behavior' => 'Crear, consultar y mostrar proyectos correctamente.',
+                'expected_question' => '¿En qué capa del flujo de proyectos aparece el fallo?',
+                'constraints' => ['investigar sin modificar archivos', 'separar persistencia, consulta y presentación'],
+                'confidence' => max($confidence, 0.9),
+            ];
         }
 
-        if ($this->isBehaviorQuestion($text)) {
-            return ['intent' => 'behavior_analysis', 'confidence' => 0.9];
-        }
-
-        if ($this->hasAny($text, ['implementacion de index', 'implementación de index', 'index()', 'explícame la implementación'])) {
-            return ['intent' => 'method_analysis', 'confidence' => 0.9];
-        }
-
-        if ($this->hasAny($text, ['como funciona', 'explica', 'describ', 'flujo', 'relaciona', 'relación', 'relaciones', 'funcionalidad de proyectos', 'que pasa cuando entro a proyectos', 'qué pasa cuando entro a proyectos'])) {
-            return ['intent' => 'functionality_flow', 'confidence' => 0.9];
-        }
-
-        if ($this->hasAny($text, ['index paso a paso', '¿qué hace', 'qué hace', 'controlador@index', 'proyecto controller'])) {
-            return ['intent' => 'method_analysis', 'confidence' => 0.8];
-        }
-
-        if ($this->hasAny($text, ['archivo inexistente', 'app/models/', 'proyectoxyz', 'qué hace app/', 'router'])) {
-            return ['intent' => 'file_lookup', 'confidence' => 0.8];
-        }
-
-        if ($this->hasAny($text, ['impacto', 'afectará', 'afectado', 'si modifico', 'modifico proyecto'])) {
-            return ['intent' => 'impact_analysis', 'confidence' => 0.8];
-        }
-
-        if ($this->hasAny($text, ['proyecto', 'proyectos', 'controller', 'controlador', 'ruta', 'routes', 'modelo', 'model'])) {
-            return ['intent' => 'method_analysis', 'confidence' => 0.8];
-        }
-
-        return ['intent' => 'general', 'confidence' => 0.6];
+        return [
+            'research_goal' => $message,
+            'domain' => 'unknown',
+            'target' => null,
+            'requested_behavior' => 'Conservar y analizar el comportamiento descrito por el usuario.',
+            'expected_question' => '¿Qué componente y evidencia corresponden al objetivo original?',
+            'constraints' => ['no inventar dominio ni evidencia', 'investigar sin modificar archivos'],
+            'confidence' => $confidence,
+        ];
     }
 
     private function generalResponse(string $message): string
@@ -468,20 +545,37 @@ class NexusRuntime
         return $this->hasAny($this->normalize($text), ['composer.json', 'app/', 'routes/', 'controller', 'modelo', 'github', 'repositorio']);
     }
 
-    private function buildExecutionPlan(NexusRuntimeRequest $request, string $intent): array
+    private function buildExecutionPlan(NexusRuntimeRequest $request, array $intent): array
     {
         $message = $this->normalize($request->message);
+        $intentName = $intent['intent'] ?? 'general';
+        $objective = $intent['objective'] ?? $this->researchObjective($request->message, $intentName, 0.0);
         $plan = [];
 
-        if ($intent === 'diagnosis') {
-            $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'routes/web.php']];
-            $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'app/Http/Controllers/ProyectoController.php']];
-            $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'routes/web.php', 'project_id' => $request->projectId]];
-            $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Http/Controllers/ProyectoController.php', 'project_id' => $request->projectId]];
+        if ($intentName === 'diagnosis') {
+            if (($objective['domain'] ?? null) === 'project_lifecycle') {
+                foreach (['routes/web.php', 'app/Http/Controllers/ProyectoController.php'] as $path) {
+                    $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => $path]];
+                    $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => [
+                        'operation' => 'file',
+                        'path' => $path,
+                        'project_id' => $request->projectId,
+                    ]];
+                }
+                return $plan;
+            }
+
+            foreach ($this->diagnosisPaths($objective) as $path) {
+                $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => [
+                    'operation' => 'file',
+                    'path' => $path,
+                    'project_id' => $request->projectId,
+                ]];
+            }
             return $plan;
         }
 
-        if ($intent === 'planning') {
+        if ($intentName === 'planning') {
             $plan[] = ['tool' => 'nexus.project.understand', 'arguments' => [
                 'project_id' => $request->projectId,
                 'path' => '.',
@@ -503,14 +597,14 @@ class NexusRuntime
             return $plan;
         }
 
-        if ($intent === 'relation_analysis') {
+        if ($intentName === 'relation_analysis') {
             $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'app/Models/Proyecto.php']];
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Models/Proyecto.php', 'project_id' => $request->projectId]];
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Models/Tarea.php', 'project_id' => $request->projectId]];
             return $plan;
         }
 
-        if ($intent === 'behavior_analysis') {
+        if ($intentName === 'behavior_analysis') {
             $paths = $this->behaviorPaths($message);
             foreach ($paths as $path) {
                 $plan[] = [
@@ -525,7 +619,7 @@ class NexusRuntime
             return $plan;
         }
 
-        if ($intent === 'functionality_flow' || $this->hasAny($message, ['proyectos', 'dashboard/proyectos', 'proyecto'])) {
+        if ($intentName === 'functionality_flow' || $this->hasAny($message, ['proyectos', 'dashboard/proyectos', 'proyecto'])) {
             $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'routes/web.php']];
             $plan[] = ['tool' => 'nexus.code.analyze', 'arguments' => ['path' => 'app/Http/Controllers/ProyectoController.php']];
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'routes/web.php', 'project_id' => $request->projectId]];
@@ -534,18 +628,18 @@ class NexusRuntime
             return $plan;
         }
 
-        if ($intent === 'method_analysis' || $this->hasAny($message, ['index', 'controller', 'metodo'])) {
+        if ($intentName === 'method_analysis' || $this->hasAny($message, ['index', 'controller', 'metodo'])) {
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Http/Controllers/ProyectoController.php', 'project_id' => $request->projectId]];
             return $plan;
         }
 
-        if ($intent === 'file_lookup') {
+        if ($intentName === 'file_lookup') {
             $target = $this->extractFileCandidate($message);
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => $target, 'project_id' => $request->projectId]];
             return $plan;
         }
 
-        if ($intent === 'impact_analysis') {
+        if ($intentName === 'impact_analysis') {
             $plan[] = ['tool' => 'nexus.project.understand', 'arguments' => ['project_id' => $request->projectId, 'path' => '.', 'include_documentation' => true]];
             $plan[] = ['tool' => 'nexus.github.inspect', 'arguments' => ['operation' => 'file', 'path' => 'app/Models/Proyecto.php', 'project_id' => $request->projectId]];
             return $plan;
@@ -555,24 +649,75 @@ class NexusRuntime
     }
 
     /** @return array{goal: string, steps: array<int, array<string, mixed>>} */
-    private function investigationPlan(string $intent): array
+    private function investigationPlan(array $intent): array
     {
-        if ($intent === 'diagnosis') {
+        $objective = $intent['objective'] ?? [];
+        if (($intent['intent'] ?? null) === 'diagnosis') {
             return [
-                'goal' => 'Localizar el flujo afectado, recopilar evidencia y separar hechos de hipótesis.',
-                'steps' => [
-                    ['phase' => 'entry_points', 'question' => '¿Qué rutas reciben la creación y el listado?', 'status' => 'pending'],
-                    ['phase' => 'write_flow', 'question' => '¿Cómo se valida y persiste el proyecto?', 'status' => 'pending'],
-                    ['phase' => 'read_flow', 'question' => '¿Cómo se consulta y prepara el listado?', 'status' => 'pending'],
-                    ['phase' => 'persistence', 'question' => '¿Qué modelo y relaciones intervienen?', 'status' => 'pending'],
-                ],
+                'goal' => ($objective['domain'] ?? null) === 'project_lifecycle'
+                    ? 'Localizar el flujo afectado, recopilar evidencia y separar hechos de hipótesis.'
+                    : ($objective['research_goal'] ?? 'Conservar el objetivo original de la investigación.'),
+                'objective' => $objective,
+                'steps' => array_map(
+                    fn (array $step): array => array_merge($step, ['status' => 'pending']),
+                    $this->investigationSteps($objective)
+                ),
             ];
         }
 
         return [
             'goal' => 'Recopilar únicamente la evidencia necesaria para la consulta actual.',
+            'objective' => $objective,
             'steps' => [],
         ];
+    }
+
+    /** @return array<int, string> */
+    private function diagnosisPaths(array $objective): array
+    {
+        return match ($objective['domain'] ?? 'unknown') {
+            'intent_classification' => [
+                'app/Nexus/NexusActionClassifier.php',
+                'app/Nexus/NexusRuntime.php',
+            ],
+            'project_view' => [
+                'resources/views/admin/proyectos.blade.php',
+                'app/Http/Controllers/ProyectoController.php',
+            ],
+            'project_lifecycle' => [
+                'routes/web.php',
+                'app/Http/Controllers/ProyectoController.php',
+            ],
+            default => [],
+        };
+    }
+
+    /** @return array<int, array{phase: string, question: string}> */
+    private function investigationSteps(array $objective): array
+    {
+        $domain = $objective['domain'] ?? 'unknown';
+
+        return match ($domain) {
+            'intent_classification' => [
+                ['phase' => 'classification', 'question' => '¿Qué componente clasifica la solicitud y reconoce test_execution?'],
+                ['phase' => 'routing', 'question' => '¿Dónde se transforma la intención en un plan de investigación?'],
+                ['phase' => 'evidence', 'question' => '¿Qué evidencia demuestra dónde se pierde la intención?'],
+            ],
+            'project_view' => [
+                ['phase' => 'view', 'question' => '¿Dónde se define el texto mostrado por la vista?'],
+                ['phase' => 'presentation_flow', 'question' => '¿Qué controlador entrega los datos a la vista?'],
+            ],
+            'project_lifecycle' => [
+                ['phase' => 'entry_points', 'question' => '¿Qué rutas reciben la creación y el listado?'],
+                ['phase' => 'write_flow', 'question' => '¿Cómo se valida y persiste el proyecto?'],
+                ['phase' => 'read_flow', 'question' => '¿Cómo se consulta y prepara el listado?'],
+                ['phase' => 'persistence', 'question' => '¿Qué modelo y relaciones intervienen?'],
+            ],
+            default => [
+                ['phase' => 'objective', 'question' => '¿Qué componente corresponde al objetivo original?'],
+                ['phase' => 'evidence', 'question' => '¿Qué evidencia permite confirmar o descartar las hipótesis?'],
+            ],
+        };
     }
 
     private function evidenceAvailable(array $result): bool
@@ -600,20 +745,26 @@ class NexusRuntime
     /** @return array{tool: string, arguments: array<string, mixed>, question: string}|null */
     private function nextAutonomousDiagnosisCall(
         NexusRuntimeRequest $request,
+        array $intent,
         array $toolResults,
         array $investigatedCalls,
     ): ?array {
         $paths = $this->evidenceSources($toolResults);
-        $candidates = [
-            [
-                'path' => 'app/Models/Proyecto.php',
-                'question' => '¿Cómo se persisten los datos y qué relaciones intervienen?',
+        $objective = $intent['objective'] ?? [];
+        $pathsToInspect = $this->diagnosisPaths($objective);
+        if (($objective['domain'] ?? null) === 'project_lifecycle') {
+            $pathsToInspect = array_merge($pathsToInspect, [
+                'app/Models/Proyecto.php',
+                'resources/views/admin/proyectos.blade.php',
+            ]);
+        }
+        $candidates = array_map(
+            fn (string $path): array => [
+                'path' => $path,
+                'question' => $this->questionForEvidence($objective, $path),
             ],
-            [
-                'path' => 'resources/views/admin/proyectos.blade.php',
-                'question' => '¿La vista representa los proyectos que devuelve el listado?',
-            ],
-        ];
+            $pathsToInspect
+        );
 
         foreach ($candidates as $candidate) {
             $call = [
@@ -1391,10 +1542,29 @@ class NexusRuntime
     }
 
     /** @return array<int, array<string, mixed>> */
-    private function buildHypotheses(string $message, string $intent, array $toolResults, array $errors): array
+    private function buildHypotheses(string $message, array|string $intent, array $toolResults, array $errors): array
     {
-        if ($intent !== 'diagnosis') {
+        $intentName = is_array($intent) ? ($intent['intent'] ?? null) : $intent;
+        if ($intentName !== 'diagnosis') {
             return [];
+        }
+
+        $objective = is_array($intent)
+            ? ($intent['objective'] ?? $this->researchObjective($message, 'diagnosis', 0.0))
+            : $this->researchObjective($message, 'diagnosis', 0.0);
+        if (($objective['domain'] ?? 'unknown') === 'unknown') {
+            $paths = $this->evidenceSources($toolResults);
+            if (in_array('app/Http/Controllers/ProyectoController.php', $paths, true)
+                || in_array('routes/web.php', $paths, true)) {
+                $objective = $this->researchObjective(
+                    'Los proyectos no aparecen después de crearlos. Investiga por qué.',
+                    'diagnosis',
+                    0.9
+                );
+            }
+        }
+        if (($objective['domain'] ?? 'unknown') !== 'project_lifecycle') {
+            return $this->buildObjectiveHypotheses($message, $objective, $toolResults, $errors);
         }
 
         $controller = $this->findEvidence($toolResults, 'app/Http/Controllers/ProyectoController.php', 'decoded_content');
@@ -1557,6 +1727,100 @@ class NexusRuntime
         }
 
         return $hypotheses;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function buildObjectiveHypotheses(
+        string $message,
+        array $objective,
+        array $toolResults,
+        array $errors
+    ): array {
+        $sources = $this->evidenceSources($toolResults);
+        $domain = (string) ($objective['domain'] ?? 'unknown');
+        $target = (string) ($objective['target'] ?? 'objetivo no determinado');
+        $evidence = $this->extractEvidenceSummary($toolResults);
+
+        if ($domain === 'intent_classification') {
+            $classifier = $this->findEvidence($toolResults, 'app/Nexus/NexusActionClassifier.php', 'decoded_content');
+            $runtime = $this->findEvidence($toolResults, 'app/Nexus/NexusRuntime.php', 'decoded_content');
+            $classifierTerms = $this->hasAny($this->normalize($classifier), ['ejecuta las pruebas', 'ejecuta los tests', 'corre las pruebas']);
+            $hypotheses = [];
+            if ($classifier !== '') {
+                $hypotheses[] = $this->hypothesis(
+                    'La clasificación de test_execution no cubre la formulación utilizada por el usuario.',
+                    $classifierTerms ? ['El clasificador contiene patrones específicos de ejecución de pruebas.'] : ['Se obtuvo el clasificador como evidencia directa.'],
+                    [],
+                    $classifierTerms ? 'posible' : 'probable',
+                    $classifierTerms ? 0.75 : 0.55,
+                    ['app/Nexus/NexusActionClassifier.php'],
+                    'La cobertura de expresiones del clasificador debe compararse con la solicitud original.'
+                );
+            }
+            if ($runtime !== '') {
+                $hypotheses[] = $this->hypothesis(
+                    'La intención se reduce a diagnosis antes de conservar test_execution como objetivo.',
+                    ['NexusRuntime clasifica investigaciones mediante un intent general de diagnosis.'],
+                    [],
+                    'probable',
+                    0.85,
+                    ['app/Nexus/NexusRuntime.php'],
+                    'El objetivo estructurado debe atravesar el plan y el diagnóstico sin sustituirse por otro dominio.'
+                );
+            }
+            return $hypotheses !== [] ? $hypotheses : [[
+                'description' => 'No hay evidencia suficiente para localizar la pérdida de la intención de test_execution.',
+                'supporting_evidence' => [],
+                'contradicting_evidence' => [],
+                'status' => 'evidencia insuficiente',
+                'confidence' => 0.1,
+                'sources' => $sources,
+                'conclusion' => 'Se requiere evidencia del clasificador y del runtime.',
+            ]];
+        }
+
+        if ($domain === 'project_view') {
+            $view = $this->findEvidence($toolResults, 'resources/views/admin/proyectos.blade.php', 'decoded_content');
+            return [[
+                'description' => $view !== ''
+                    ? 'El texto de proyectos se define o se renderiza en la vista analizada.'
+                    : 'No se obtuvo evidencia suficiente de la vista que contiene el texto de proyectos.',
+                'supporting_evidence' => $view !== '' ? ['La vista objetivo fue obtenida como evidencia.'] : [],
+                'contradicting_evidence' => [],
+                'status' => $view !== '' ? 'probable' : 'evidencia insuficiente',
+                'confidence' => $view !== '' ? 0.8 : 0.15,
+                'sources' => $sources,
+                'conclusion' => $view !== ''
+                    ? 'El objetivo corresponde a presentación y texto, no a persistencia de proyectos.'
+                    : 'No se puede concluir dónde se define el texto sin el contenido de la vista.',
+            ]];
+        }
+
+        return [[
+            'description' => 'El objetivo de investigación no tiene un dominio suficientemente determinado.',
+            'supporting_evidence' => $evidence !== [] ? ['Se obtuvo evidencia, pero no permite asignarla a un dominio seguro.'] : [],
+            'contradicting_evidence' => [],
+            'status' => 'evidencia insuficiente',
+            'confidence' => 0.2,
+            'sources' => $sources,
+            'conclusion' => 'Se conserva el mensaje original y no se inventan hipótesis de proyectos.',
+        ]];
+    }
+
+    private function questionForEvidence(array $objective, string $path): string
+    {
+        if (($objective['domain'] ?? null) === 'intent_classification') {
+            return str_contains($path, 'ActionClassifier')
+                ? '¿Qué expresiones clasifica el componente como test_execution?'
+                : '¿Dónde conserva o sustituye Nexus el objetivo de test_execution?';
+        }
+        if (($objective['domain'] ?? null) === 'project_view') {
+            return str_contains($path, 'views/')
+                ? '¿Dónde se define y renderiza el texto de la vista?'
+                : '¿Qué datos entrega el controlador a la vista objetivo?';
+        }
+
+        return '¿Qué evidencia aporta este archivo al objetivo original?';
     }
 
     /** @return array<string, mixed> */
@@ -1770,6 +2034,7 @@ class NexusRuntime
             'problem_observed' => $message,
             'context' => [
                 'intent' => $intent,
+                'objective' => $this->researchObjective($message, $intent, 0.0),
                 'sources' => $sources,
                 'read_only' => true,
             ],
