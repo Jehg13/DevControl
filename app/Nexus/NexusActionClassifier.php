@@ -33,6 +33,14 @@ final class NexusActionClassifier
             return null;
         }
 
+        if ($this->hasAny($text, ['haz push', 'hacer push', 'sube los cambios', 'publica los cambios'])) {
+            return $this->action('push', 'repository', [], [], false, false);
+        }
+
+        if ($this->hasAny($text, ['haz rollback', 'hacer rollback', 'revierte el ultimo cambio', 'revierte el último cambio'])) {
+            return $this->action('rollback', 'repository', [], [], false, false);
+        }
+
         if ($this->hasAny($text, ['diff de git', 'git diff', 'diferencias de git', 'diferencias del repositorio'])) {
             return $this->action('git_diff', 'repository', [], ['nexus.read'], false, false);
         }
@@ -61,6 +69,12 @@ final class NexusActionClassifier
             'corre phpunit',
             'corre los tests',
             'corre las pruebas',
+            'puedes correr las pruebas',
+            'puedes ejecutar las pruebas',
+            'echale un vistazo a las pruebas y ejecutalas',
+            'échale un vistazo a las pruebas y ejecútalas',
+            'comprueba si pasan todas las pruebas',
+            'quiero validar el proyecto ejecutando las pruebas',
             'valida la implementacion',
             'valida la implementación',
         ])) {

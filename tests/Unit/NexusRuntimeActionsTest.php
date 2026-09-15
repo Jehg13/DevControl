@@ -40,6 +40,55 @@ class NexusRuntimeActionsTest extends TestCase
         $this->assertSame('runtime_action', $response->source);
     }
 
+    public function test_test_execution_exposes_the_real_structured_summary_in_the_response(): void
+    {
+        $tool = new class extends AbstractNexusTool
+        {
+            public function name(): string { return 'nexus.code.validate'; }
+            public function description(): string { return 'test'; }
+            public function parameters(): array { return []; }
+            public function permissions(): array { return ['nexus.read']; }
+            protected function handle(array $parameters, NexusToolContext $context): NexusToolResult
+            {
+                return NexusToolResult::success([
+                    'passed' => true,
+                    'summary' => [
+                        'tests' => 12,
+                        'assertions' => 34,
+                        'failures' => 0,
+                        'errors' => 0,
+                        'skipped' => 1,
+                        'incomplete' => 0,
+                        'warnings' => 0,
+                        'deprecations' => 2,
+                        'duration' => '1.25s',
+                    ],
+                    'checks' => [[
+                        'command' => 'php artisan test --filter=Nexus',
+                        'passed' => true,
+                        'stdout' => 'Tests: 12, Assertions: 34',
+                        'stderr' => '',
+                        'output' => 'Tests: 12, Assertions: 34',
+                        'exit_code' => 0,
+                    ]],
+                ]);
+            }
+        };
+
+        $response = (new NexusRuntime(
+            new NexusToolRegistry([$tool]),
+            null,
+            new NexusActionClassifier(),
+        ))->handle(new NexusRuntimeRequest(message: 'Ejecuta las pruebas Nexus'));
+
+        $this->assertStringContainsString('12 tests.', $response->finalMessage);
+        $this->assertStringContainsString('34 assertions.', $response->finalMessage);
+        $this->assertStringContainsString('1 omitidas.', $response->finalMessage);
+        $this->assertStringContainsString('Duración: 1.25s.', $response->finalMessage);
+        $this->assertSame(12, $response->toolResults[0]['result']['data']['summary']['tests']);
+        $this->assertSame(0, $response->toolResults[0]['result']['data']['checks'][0]['exit_code']);
+    }
+
     public function test_test_execution_requests_are_actions_but_investigations_use_the_research_pipeline(): void
     {
         $classifier = new NexusActionClassifier();
@@ -54,7 +103,44 @@ class NexusRuntimeActionsTest extends TestCase
             $action = $classifier->classify(new NexusRuntimeRequest(message: $message));
             $this->assertSame('test_execution', $action['action'], $message);
         }
+    }
 
+    public function test_unsupported_push_and_rollback_are_recognized_without_execution(): void
+    {
+        $runtime = app(\App\Nexus\NexusRuntime::class);
+
+        foreach ([
+            ['message' => 'Haz push de los cambios actuales.', 'intent' => 'push', 'word' => 'push'],
+            ['message' => 'Haz rollback del último cambio.', 'intent' => 'rollback', 'word' => 'rollback'],
+        ] as $case) {
+            $response = $runtime->handle(new NexusRuntimeRequest(message: $case['message']));
+
+            $this->assertSame($case['intent'], $response->intent);
+            $this->assertSame('unsupported', $response->status);
+            $this->assertSame([], $response->toolsUsed);
+            $this->assertStringContainsString($case['word'], strtolower($response->finalMessage));
+        }
+    }
+
+    public function test_informational_queries_do_not_execute_tools(): void
+    {
+        $runtime = app(\App\Nexus\NexusRuntime::class);
+
+        foreach ([
+            ['message' => '¿Cómo funcionan actualmente las pruebas de Nexus?', 'intent' => 'test_execution_query'],
+            ['message' => '¿Cómo funciona actualmente el commit de DevControl?', 'intent' => 'commit_query'],
+        ] as $case) {
+            $response = $runtime->handle(new NexusRuntimeRequest(message: $case['message'], projectId: 1));
+
+            $this->assertSame($case['intent'], $response->intent);
+            $this->assertSame([], $response->toolsUsed);
+            $this->assertStringNotContainsString('Ejecuté', $response->finalMessage);
+        }
+    }
+
+    public function test_test_execution_investigations_use_the_research_pipeline(): void
+    {
+        $runtime = app(\App\Nexus\NexusRuntime::class);
         foreach ([
             '¿Por qué Nexus no detecta que quiero ejecutar las pruebas?',
             'Investiga por qué no reconoce mis solicitudes para ejecutar pruebas.',

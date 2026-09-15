@@ -261,6 +261,8 @@ class NexusRuntime
             $message = match ($action['action']) {
                 'security_violation' => 'La solicitud fue rechazada por NexusSecurityBoundary: no se pueden ignorar permisos ni modificar directamente los controles de seguridad.',
                 'unauthorized_tool' => 'La solicitud fue rechazada: la herramienta no está autorizada por Nexus Core.',
+                'push' => 'Reconozco la solicitud de push, pero esta capacidad todavía no está implementada. No se ejecutó ninguna acción.',
+                'rollback' => 'Reconozco la solicitud de rollback, pero esta capacidad todavía no está implementada. No se ejecutó ningún cambio.',
                 default => 'La acción git_diff está identificada, pero no está implementada de forma segura en Nexus. No simularé sus resultados.',
             };
 
@@ -352,18 +354,72 @@ class NexusRuntime
             );
         }
 
+        $validationData = $action['action'] === 'test_execution' && is_array($result->data)
+            ? $result->data
+            : null;
+        $validationPassed = $validationData === null
+            ? null
+            : (bool) ($validationData['passed'] ?? false);
+        $finalMessage = $action['action'] === 'test_execution'
+            ? $this->validationResultMessage($validationData, $result->successful)
+            : 'La acción solicitada se ejecutó correctamente.';
+
         return new NexusRuntimeResponse(
-            finalMessage: $action['action'] === 'test_execution'
-                ? 'Ejecuté la validación solicitada y devolví sus resultados.'
-                : 'La acción solicitada se ejecutó correctamente.',
+            finalMessage: $finalMessage,
             intent: $action['action'],
-            evidence: [$result->data],
+            evidence: $result->data !== null ? [$result->data] : [],
             toolsUsed: [$tool],
             actions: [$action],
+            errors: $result->successful && $validationPassed !== false
+                ? []
+                : [$result->error ?? 'La validación reportó fallos.'],
             toolResults: $toolResult,
-            certainty: 'CONFIRMADO',
+            certainty: $validationPassed === true ? 'CONFIRMADO' : 'PROBABLE',
+            status: $validationPassed === false ? 'failed' : 'completed',
             source: 'runtime_action',
         );
+    }
+
+    private function validationResultMessage(?array $data, bool $toolSuccessful): string
+    {
+        if (! $toolSuccessful || $data === null) {
+            return 'La ejecución de pruebas no devolvió un resultado estructurado.';
+        }
+
+        $summary = $data['summary'] ?? [];
+        $parts = [
+            (bool) ($data['passed'] ?? false)
+                ? 'Las pruebas terminaron correctamente.'
+                : 'Las pruebas terminaron con fallos.',
+        ];
+
+        foreach ([
+            'tests' => 'tests',
+            'assertions' => 'assertions',
+            'failures' => 'fallos',
+            'errors' => 'errores',
+            'skipped' => 'omitidas',
+            'incomplete' => 'incompletas',
+            'warnings' => 'warnings',
+            'deprecations' => 'deprecaciones',
+        ] as $key => $label) {
+            if (array_key_exists($key, $summary)) {
+                $parts[] = $summary[$key] === null
+                    ? $label.': no disponible.'
+                    : $summary[$key].' '.$label.'.';
+            }
+        }
+
+        if (($summary['duration'] ?? null) !== null) {
+            $parts[] = 'Duración: '.$summary['duration'].'.';
+        }
+
+        $checks = $data['checks'] ?? [];
+        if ($checks !== []) {
+            $parts[] = 'Comando: '.implode(', ', array_column($checks, 'command')).'.';
+        }
+
+        return implode(' ', $parts);
     }
 
     private function actionFailure(array $action, string $message): NexusRuntimeResponse
@@ -404,6 +460,12 @@ class NexusRuntime
         } elseif ($this->isGeneralDevControlQuestion($text)) {
             $intent = 'general';
             $confidence = 0.98;
+        } elseif ($this->hasAny($text, ['como funcionan las pruebas', 'como funcionan actualmente las pruebas', 'como se ejecutan las pruebas', 'que pruebas tiene nexus', 'que hace el sistema cuando ejecuto phpunit'])) {
+            $intent = 'test_execution_query';
+            $confidence = 0.95;
+        } elseif ($this->hasAny($text, ['como funciona el commit', 'como funciona actualmente el commit', 'como prepara nexus el commit'])) {
+            $intent = 'commit_query';
+            $confidence = 0.95;
         } elseif ($this->hasAny($text, [
             'no aparecen',
             'no se muestran',
@@ -454,7 +516,7 @@ class NexusRuntime
         ];
     }
 
-    /** @return array{research_goal: string, domain: string, target: string|null, requested_behavior: string, expected_question: string, constraints: array<int, string>, confidence: float} */
+    /** @return array{research_goal: string, domain: string, target: string|null, requested_behavior: string, expected_behavior: string, expected_question: string, question: string, constraints: array<int, string>, original_message: string, confidence: float} */
     private function researchObjective(string $message, string $intent, float $confidence): array
     {
         $text = $this->normalize($message);
@@ -479,8 +541,41 @@ class NexusRuntime
                 'domain' => 'intent_classification',
                 'target' => 'test_execution',
                 'requested_behavior' => 'Reconocer solicitudes de ejecución de pruebas y dirigirlas a test_execution.',
+                'expected_behavior' => 'Clasificar correctamente la solicitud como test_execution sin ejecutar una investigación.',
                 'expected_question' => '¿Dónde se pierde la intención de ejecutar pruebas y qué componente debe clasificarla?',
+                'question' => '¿Por qué se pierde test_execution durante la clasificación o el enrutamiento?',
                 'constraints' => ['investigar sin modificar archivos', 'conservar el mensaje original'],
+                'original_message' => $message,
+                'confidence' => max($confidence, 0.95),
+            ];
+        }
+
+        if ($this->hasAny($text, ['como funcionan las pruebas', 'como funcionan actualmente las pruebas', 'como se ejecutan las pruebas', 'que pruebas tiene nexus', 'que hace el sistema cuando ejecuto phpunit'])) {
+            return [
+                'research_goal' => 'Explicar cómo se validan actualmente las pruebas de Nexus.',
+                'domain' => 'test_execution_query',
+                'target' => 'nexus.code.validate',
+                'requested_behavior' => 'Consultar el flujo actual sin ejecutar pruebas.',
+                'expected_behavior' => 'Explicar el flujo sin invocar nexus.code.validate.',
+                'expected_question' => '¿Qué herramienta y servicio validan las pruebas y qué resultado producen?',
+                'question' => '¿Cómo funcionan actualmente las pruebas de Nexus?',
+                'constraints' => ['consulta informativa', 'no ejecutar herramientas de validación'],
+                'original_message' => $message,
+                'confidence' => max($confidence, 0.95),
+            ];
+        }
+
+        if ($this->hasAny($text, ['como funciona el commit', 'como funciona actualmente el commit', 'como prepara nexus el commit'])) {
+            return [
+                'research_goal' => 'Explicar cómo se prepara y autoriza actualmente un commit.',
+                'domain' => 'commit_query',
+                'target' => 'nexus.github.local.commit',
+                'requested_behavior' => 'Consultar el flujo sin crear un commit.',
+                'expected_behavior' => 'Explicar permisos y confirmación sin invocar el commit.',
+                'expected_question' => '¿Qué permisos y confirmaciones requiere el commit?',
+                'question' => '¿Cómo funciona actualmente el commit de DevControl?',
+                'constraints' => ['consulta informativa', 'no crear commits'],
+                'original_message' => $message,
                 'confidence' => max($confidence, 0.95),
             ];
         }
@@ -491,8 +586,11 @@ class NexusRuntime
                 'domain' => 'project_view',
                 'target' => 'resources/views/admin/proyectos.blade.php',
                 'requested_behavior' => 'Mostrar el texto solicitado en la vista de proyectos.',
+                'expected_behavior' => 'Localizar el texto y su renderizado sin investigar persistencia.',
                 'expected_question' => '¿Qué archivo y flujo de presentación contienen el texto de proyectos?',
+                'question' => '¿Dónde se define y renderiza el texto de la vista?',
                 'constraints' => ['investigar sin modificar archivos', 'distinguir presentación de persistencia'],
+                'original_message' => $message,
                 'confidence' => max($confidence, 0.95),
             ];
         }
@@ -503,8 +601,11 @@ class NexusRuntime
                 'domain' => 'project_lifecycle',
                 'target' => 'Proyecto',
                 'requested_behavior' => 'Crear, consultar y mostrar proyectos correctamente.',
+                'expected_behavior' => 'Reconstruir el ciclo de vida de proyectos con evidencia.',
                 'expected_question' => '¿En qué capa del flujo de proyectos aparece el fallo?',
+                'question' => '¿Qué capa del flujo de proyectos produce el resultado inesperado?',
                 'constraints' => ['investigar sin modificar archivos', 'separar persistencia, consulta y presentación'],
+                'original_message' => $message,
                 'confidence' => max($confidence, 0.9),
             ];
         }
@@ -514,8 +615,11 @@ class NexusRuntime
             'domain' => 'unknown',
             'target' => null,
             'requested_behavior' => 'Conservar y analizar el comportamiento descrito por el usuario.',
+            'expected_behavior' => 'Responder únicamente con evidencia relacionada con el mensaje original.',
             'expected_question' => '¿Qué componente y evidencia corresponden al objetivo original?',
+            'question' => $message,
             'constraints' => ['no inventar dominio ni evidencia', 'investigar sin modificar archivos'],
+            'original_message' => $message,
             'confidence' => $confidence,
         ];
     }
@@ -820,6 +924,14 @@ class NexusRuntime
         $controllerEvidence = $this->findEvidence($toolResults, 'app/Http/Controllers/ProyectoController.php', 'decoded_content');
         $proyectoEvidence = $this->findEvidence($toolResults, 'app/Models/Proyecto.php', 'decoded_content');
         $tareaEvidence = $this->findEvidence($toolResults, 'app/Models/Tarea.php', 'decoded_content');
+
+        if ($intent === 'test_execution_query') {
+            return 'Actualmente Nexus mantiene separadas las consultas sobre pruebas de su ejecución. La ejecución explícita utiliza la acción test_execution, que delega en nexus.code.validate y en NexusValidationService; esta consulta no ejecutó la herramienta.';
+        }
+
+        if ($intent === 'commit_query') {
+            return 'Actualmente Nexus clasifica un commit como una acción protegida: prepara nexus.github.local.commit, exige permisos de escritura y confirmación explícita antes de crear el commit. Esta consulta no creó ningún commit.';
+        }
 
         if ($intent === 'behavior_analysis') {
             return $this->appendSelfEvaluation($this->behaviorNarrative($behavior), $selfEvaluation);

@@ -38,6 +38,10 @@ class NexusActionClassifierTest extends TestCase
             'Quiero ejecutar las pruebas',
             'Corre PHPUnit',
             'Quiero que corras los tests del proyecto',
+            'Puedes correr las pruebas?',
+            'Échale un vistazo a las pruebas y ejecútalas',
+            'Comprueba si pasan todas las pruebas',
+            'Quiero validar el proyecto ejecutando las pruebas',
             'Ejecuta los tests',
             'Ejecuta las pruebas Nexus',
         ] as $message) {
@@ -62,6 +66,21 @@ class NexusActionClassifierTest extends TestCase
                 $classifier->classify(new NexusRuntimeRequest(message: $message)),
                 $message
             );
+        }
+    }
+
+    public function test_push_and_rollback_are_explicitly_unsupported_actions(): void
+    {
+        $classifier = app(NexusActionClassifier::class);
+
+        foreach ([
+            ['message' => 'Haz push de los cambios actuales.', 'action' => 'push'],
+            ['message' => 'Haz rollback del último cambio.', 'action' => 'rollback'],
+        ] as $case) {
+            $action = $classifier->classify(new NexusRuntimeRequest(message: $case['message']));
+
+            $this->assertSame($case['action'], $action['action']);
+            $this->assertFalse($action['available']);
         }
     }
 

@@ -1360,7 +1360,7 @@ class ProyectoController extends Controller
     /**
      * Devuelve los cambios locales seguros que pueden publicarse en el repositorio.
      *
-     * @return array{files:array<int,array{path:string,status:string}>,error:?string}
+     * @return array{branch:?string,clean:bool,files:array<int,array{path:string,status:string,staged:bool,unstaged:bool}>,error:?string}
      */
     public function cambiosLocalesPublicables(): array
     {
@@ -1373,6 +1373,10 @@ class ProyectoController extends Controller
             ];
         }
 
+        $branchProcess = new Process([$git, 'branch', '--show-current'], base_path());
+        $branchProcess->run();
+        $branch = $branchProcess->isSuccessful() ? trim($branchProcess->getOutput()) : null;
+
         $process = new Process(
             [$git, 'status', '--porcelain', '--untracked-files=all'],
             base_path()
@@ -1381,6 +1385,8 @@ class ProyectoController extends Controller
 
         if (! $process->isSuccessful()) {
             return [
+                'branch' => $branch,
+                'clean' => false,
                 'files' => [],
                 'error' => trim($process->getErrorOutput()) ?: 'No se pudo consultar el estado local de Git.',
             ];
@@ -1392,7 +1398,8 @@ class ProyectoController extends Controller
                 continue;
             }
 
-            $status = trim(substr($line, 0, 2));
+            $statusFlags = substr($line, 0, 2);
+            $status = trim($statusFlags);
             $path = preg_replace('/^\s+|\s+$/u', '', substr($line, 3)) ?? '';
             if (str_contains($path, ' -> ')) {
                 $path = preg_replace('/^\s+|\s+$/u', '', strrchr($path, '>')) ?? '';
@@ -1403,11 +1410,21 @@ class ProyectoController extends Controller
             }
 
             if ($path !== '') {
-                $files[] = ['path' => str_replace('\\', '/', $path), 'status' => $status];
+                $files[] = [
+                    'path' => str_replace('\\', '/', $path),
+                    'status' => $status,
+                    'staged' => $statusFlags[0] !== ' ' && $statusFlags[0] !== '?',
+                    'unstaged' => $statusFlags[1] !== ' ' && $statusFlags[0] !== '?',
+                ];
             }
         }
 
-        return ['files' => $files, 'error' => null];
+        return [
+            'branch' => $branch !== '' ? $branch : null,
+            'clean' => $files === [],
+            'files' => $files,
+            'error' => null,
+        ];
     }
 
     private function rutaEjecutableGit(): ?string
