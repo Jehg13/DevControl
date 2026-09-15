@@ -50,4 +50,46 @@ class NexusTestResultParserTest extends TestCase
         $this->assertNull($result['failures']);
         $this->assertNull($result['errors']);
     }
+
+    public function test_preserves_failure_name_message_file_line_and_trace(): void
+    {
+        $result = app(NexusTestResultParser::class)->parse(<<<'PHPUNIT'
+There was 1 failure:
+
+1) Tests\Feature\ExampleTest::test_it_rejects_invalid_input
+Failed asserting that 422 is identical to 200.
+
+C:\project\tests\Feature\ExampleTest.php:27
+	C:\project\vendor\phpunit\phpunit\src\Framework\TestCase.php:123
+PHPUNIT);
+
+        $this->assertCount(1, $result['failure_details']);
+        $failure = $result['failure_details'][0];
+        $this->assertSame('Tests\Feature\ExampleTest::test_it_rejects_invalid_input', $failure['test']);
+        $this->assertSame('Tests\Feature\ExampleTest', $failure['class']);
+        $this->assertSame('test_it_rejects_invalid_input', $failure['method']);
+        $this->assertStringContainsString('Failed asserting that 422 is identical to 200.', $failure['message']);
+        $this->assertSame('C:\project\tests\Feature\ExampleTest.php', $failure['file']);
+        $this->assertSame(27, $failure['line']);
+        $this->assertStringContainsString('Framework\TestCase.php:123', $failure['trace']);
+    }
+
+    public function test_preserves_multiple_failure_details(): void
+    {
+        $result = app(NexusTestResultParser::class)->parse(<<<'PHPUNIT'
+There were 2 failures:
+
+1) Tests\Unit\FirstTest::test_first
+Failed asserting that false is true.
+C:\project\tests\Unit\FirstTest.php:10
+
+2) Tests\Unit\SecondTest::test_second
+Failed asserting that null is not null.
+C:\project\tests\Unit\SecondTest.php:20
+PHPUNIT);
+
+        $this->assertCount(2, $result['failure_details']);
+        $this->assertSame('Tests\Unit\FirstTest::test_first', $result['failure_details'][0]['test']);
+        $this->assertSame('Tests\Unit\SecondTest::test_second', $result['failure_details'][1]['test']);
+    }
 }

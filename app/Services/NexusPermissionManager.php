@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Exceptions\NexusToolPermissionException;
 use App\Models\NexusPermissionAudit;
 use App\Nexus\NexusToolContext;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class NexusPermissionManager
@@ -23,27 +25,31 @@ class NexusPermissionManager
 
         $projectId = $context->projectId ?? $parameters['project_id'] ?? $parameters['proyecto_id'] ?? null;
         if (is_int($projectId) || ctype_digit((string) $projectId)) {
-            $projectExists = \App\Models\Proyecto::whereKey((int) $projectId)->exists();
+            $projectExists = $this->withDatabaseReconnect(
+                fn (): bool => \App\Models\Proyecto::whereKey((int) $projectId)->exists()
+            );
             $projectId = $projectExists ? (int) $projectId : null;
         } else {
             $projectId = null;
         }
 
-        $audit = NexusPermissionAudit::create([
-            'nexus_run_id' => $context->runId,
-            'usuario_id' => $context->user?->id,
-            'proyecto_id' => $projectId,
-            'tool_name' => $toolName,
-            'action' => $toolName,
-            'risk_level' => $risk,
-            'requested_permissions' => $permissions,
-            'status' => 'requested',
-            'metadata' => [
-                'source' => $context->source,
-                'mode' => $this->mode(),
-                'parameters_hash' => hash('sha256', json_encode($parameters)),
-            ],
-        ]);
+        $audit = $this->withDatabaseReconnect(
+            fn (): NexusPermissionAudit => NexusPermissionAudit::create([
+                'nexus_run_id' => $context->runId,
+                'usuario_id' => $context->user?->id,
+                'proyecto_id' => $projectId,
+                'tool_name' => $toolName,
+                'action' => $toolName,
+                'risk_level' => $risk,
+                'requested_permissions' => $permissions,
+                'status' => 'requested',
+                'metadata' => [
+                    'source' => $context->source,
+                    'mode' => $this->mode(),
+                    'parameters_hash' => hash('sha256', json_encode($parameters)),
+                ],
+            ])
+        );
 
         if ($permissions === []) {
             return $this->deny($audit, 'permission_not_declared', 'La herramienta no declaró permisos explícitos.');
@@ -70,6 +76,26 @@ class NexusPermissionManager
         ]);
 
         return $audit->id;
+    }
+
+    private function withDatabaseReconnect(\Closure $operation): mixed
+    {
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            try {
+                return $operation();
+            } catch (QueryException $exception) {
+                if ((int) $exception->getCode() !== 2002 || $attempt === 2) {
+                    throw $exception;
+                }
+
+                DB::disconnect('mysql');
+                DB::purge('mysql');
+                usleep(100000);
+                DB::reconnect('mysql');
+            }
+        }
+
+        throw new \RuntimeException('No se pudo restablecer la conexión de permisos.');
     }
 
     public function complete(int $auditId, bool $successful, array $result = []): void

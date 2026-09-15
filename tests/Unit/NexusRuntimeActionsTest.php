@@ -89,6 +89,45 @@ class NexusRuntimeActionsTest extends TestCase
         $this->assertSame(0, $response->toolResults[0]['result']['data']['checks'][0]['exit_code']);
     }
 
+    public function test_test_execution_exposes_failure_details_in_response_and_message(): void
+    {
+        $failure = [
+            'test' => 'Tests\Feature\ExampleTest::test_invalid_input',
+            'class' => 'Tests\Feature\ExampleTest',
+            'method' => 'test_invalid_input',
+            'message' => 'Failed asserting that 422 is identical to 200.',
+            'file' => 'tests/Feature/ExampleTest.php',
+            'line' => 27,
+            'trace' => 'trace',
+        ];
+        $tool = new class($failure) extends AbstractNexusTool
+        {
+            public function __construct(private array $failure) {}
+            public function name(): string { return 'nexus.code.validate'; }
+            public function description(): string { return 'test'; }
+            public function parameters(): array { return []; }
+            public function permissions(): array { return ['nexus.read']; }
+            protected function handle(array $parameters, NexusToolContext $context): NexusToolResult
+            {
+                return NexusToolResult::success([
+                    'passed' => false,
+                    'summary' => ['tests' => 1, 'assertions' => 1, 'failures' => 1, 'errors' => 0, 'skipped' => 0, 'incomplete' => 0, 'warnings' => 0, 'deprecations' => 0],
+                    'failure_details' => [$this->failure],
+                    'checks' => [['command' => 'php artisan test --filter=Nexus', 'failure_details' => [$this->failure]]],
+                ]);
+            }
+        };
+
+        $response = (new NexusRuntime(new NexusToolRegistry([$tool]), null, new NexusActionClassifier()))
+            ->handle(new NexusRuntimeRequest(
+                message: 'Ejecuta las pruebas y muéstrame cuáles tests fallaron y el mensaje de error.'
+            ));
+
+        $this->assertStringContainsString('Tests\Feature\ExampleTest::test_invalid_input', $response->finalMessage);
+        $this->assertStringContainsString('Failed asserting that 422 is identical to 200.', $response->finalMessage);
+        $this->assertSame($failure, $response->toolResults[0]['result']['data']['failure_details'][0]);
+    }
+
     public function test_test_execution_requests_are_actions_but_investigations_use_the_research_pipeline(): void
     {
         $classifier = new NexusActionClassifier();

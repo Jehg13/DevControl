@@ -8,9 +8,11 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('nexus_runs', function (Blueprint $table) {
-            $table->json('internal_state')->nullable()->after('context');
-        });
+        if (! Schema::hasColumn('nexus_runs', 'internal_state')) {
+            Schema::table('nexus_runs', function (Blueprint $table) {
+                $table->json('internal_state')->nullable()->after('context');
+            });
+        }
     }
 
     public function down(): void

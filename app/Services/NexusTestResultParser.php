@@ -4,7 +4,7 @@ namespace App\Services;
 
 final class NexusTestResultParser
 {
-    /** @return array{tests:int|null,assertions:int|null,failures:int|null,errors:int|null,skipped:int|null,incomplete:int|null,warnings:int|null,deprecations:int|null} */
+    /** @return array{tests:int|null,assertions:int|null,failures:int|null,errors:int|null,skipped:int|null,incomplete:int|null,warnings:int|null,deprecations:int|null,failure_details:array<int,array<string,mixed>>} */
     public function parse(string $output): array
     {
         $metrics = [
@@ -16,6 +16,7 @@ final class NexusTestResultParser
             'incomplete' => null,
             'warnings' => null,
             'deprecations' => null,
+            'failure_details' => [],
         ];
 
         $summary = $this->lineContaining($output, 'Tests:');
@@ -66,7 +67,85 @@ final class NexusTestResultParser
             $metrics['assertions'] = (int) $match[2];
         }
 
+        $metrics['failure_details'] = $this->parseFailureDetails($output);
+
         return $metrics;
+    }
+
+    /** @return array<int,array{test:string,class:string|null,method:string|null,message:string,file:string|null,line:int|null,trace:string}> */
+    private function parseFailureDetails(string $output): array
+    {
+        $lines = preg_split('/\R/', $output) ?: [];
+        $details = [];
+        $current = null;
+
+        foreach ($lines as $line) {
+            $cleanLine = preg_replace('/\x1B\[[0-?]*[ -\/]*[@-~]/', '', $line) ?? $line;
+            $trimmed = trim($cleanLine);
+            if (preg_match('/^\d+\)\s+(.+)$/', $trimmed, $match) === 1) {
+                if ($current !== null) {
+                    $details[] = $this->finishFailure($current);
+                }
+
+                $test = trim($match[1]);
+                $class = null;
+                $method = null;
+                if (preg_match('/^(.+?)(?:::|::)([^:]+)$/', $test, $testMatch) === 1) {
+                    $class = $testMatch[1];
+                    $method = $testMatch[2];
+                }
+
+                $current = [
+                    'test' => $test,
+                    'class' => $class,
+                    'method' => $method,
+                    'message_lines' => [],
+                    'trace_lines' => [],
+                    'file' => null,
+                    'line' => null,
+                    'in_trace' => false,
+                ];
+                continue;
+            }
+
+            if ($current === null) {
+                continue;
+            }
+
+            if (preg_match('/^(.*?\.php):(\d+)(?::\d+)?$/', $trimmed, $location) === 1) {
+                if ($current['file'] === null) {
+                    $current['file'] = $location[1];
+                    $current['line'] = (int) $location[2];
+                }
+                $current['in_trace'] = true;
+            }
+
+            if ($current['in_trace']) {
+                $current['trace_lines'][] = $cleanLine;
+            } elseif ($trimmed !== '') {
+                $current['message_lines'][] = $trimmed;
+            }
+        }
+
+        if ($current !== null) {
+            $details[] = $this->finishFailure($current);
+        }
+
+        return $details;
+    }
+
+    /** @param array<string,mixed> $failure */
+    private function finishFailure(array $failure): array
+    {
+        return [
+            'test' => $failure['test'],
+            'class' => $failure['class'],
+            'method' => $failure['method'],
+            'message' => implode(' ', $failure['message_lines']),
+            'file' => $failure['file'],
+            'line' => $failure['line'],
+            'trace' => trim(implode("\n", $failure['trace_lines'])),
+        ];
     }
 
     private function lineContaining(string $output, string $needle): ?string

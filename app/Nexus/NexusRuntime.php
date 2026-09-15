@@ -361,7 +361,7 @@ class NexusRuntime
             ? null
             : (bool) ($validationData['passed'] ?? false);
         $finalMessage = $action['action'] === 'test_execution'
-            ? $this->validationResultMessage($validationData, $result->successful)
+            ? $this->validationResultMessage($validationData, $result->successful, $request->message)
             : 'La acción solicitada se ejecutó correctamente.';
 
         return new NexusRuntimeResponse(
@@ -380,7 +380,7 @@ class NexusRuntime
         );
     }
 
-    private function validationResultMessage(?array $data, bool $toolSuccessful): string
+    private function validationResultMessage(?array $data, bool $toolSuccessful, string $requestMessage = ''): string
     {
         if (! $toolSuccessful || $data === null) {
             return 'La ejecución de pruebas no devolvió un resultado estructurado.';
@@ -414,12 +414,34 @@ class NexusRuntime
             $parts[] = 'Duración: '.$summary['duration'].'.';
         }
 
+        if ($this->requestsFailureDetails($requestMessage)) {
+            $failures = $data['failure_details'] ?? ($data['checks'][0]['failure_details'] ?? []);
+            if ($failures !== []) {
+                $parts[] = 'Detalles de los fallos:';
+                foreach ($failures as $index => $failure) {
+                    $parts[] = ($index + 1).'. '.$failure['test'].'. Error: '.
+                        ($failure['message'] !== '' ? $failure['message'] : 'Sin mensaje textual en la salida de PHPUnit.').
+                        (($failure['file'] ?? null) !== null ? ' Archivo: '.$failure['file'].':'.$failure['line'].'.' : '');
+                }
+            }
+        }
+
         $checks = $data['checks'] ?? [];
         if ($checks !== []) {
             $parts[] = 'Comando: '.implode(', ', array_column($checks, 'command')).'.';
         }
 
         return implode(' ', $parts);
+    }
+
+    private function requestsFailureDetails(string $message): bool
+    {
+        $normalized = Str::lower(Str::ascii($message));
+
+        return str_contains($normalized, 'cuales')
+            || str_contains($normalized, 'detalles')
+            || str_contains($normalized, 'nombre de cada')
+            || str_contains($normalized, 'mensaje de error');
     }
 
     private function actionFailure(array $action, string $message): NexusRuntimeResponse

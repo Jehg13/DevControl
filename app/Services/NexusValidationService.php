@@ -12,6 +12,10 @@ class NexusValidationService
 
     public function validate(array $files = [], string $suite = 'php'): array
     {
+        if (PHP_SAPI !== 'cli') {
+            set_time_limit(0);
+        }
+
         $checks = [];
 
         if (in_array($suite, ['php', 'all'], true)) {
@@ -38,6 +42,10 @@ class NexusValidationService
         return [
             'passed' => collect($checks)->every(fn (array $check) => $check['passed']),
             'checks' => $checks,
+            'failure_details' => collect($checks)
+                ->flatMap(fn (array $check): array => $check['failure_details'] ?? [])
+                ->values()
+                ->all(),
             'validated_files' => array_values($files),
             'suite' => $suite,
             'summary' => $summary,
@@ -101,12 +109,50 @@ class NexusValidationService
 
     private function run(array $command, string $label): array
     {
-        $process = new Process($command, base_path());
-        $process->setTimeout(300);
+        $temporaryDirectory = storage_path('framework/testing');
+        if (! is_dir($temporaryDirectory) && ! mkdir($temporaryDirectory, 0775, true) && ! is_dir($temporaryDirectory)) {
+            throw new \RuntimeException('No se pudo preparar el directorio temporal de PHPUnit.');
+        }
+
+        $junitPath = null;
+        if (str_contains($label, 'artisan test')) {
+            $junitPath = $temporaryDirectory.DIRECTORY_SEPARATOR.'nexus-'.bin2hex(random_bytes(8)).'.xml';
+            $command[] = '--log-junit='.$junitPath;
+        }
+
+        $environment = [];
+        foreach ([
+            'PATH',
+            'PATHEXT',
+            'SystemRoot',
+            'WINDIR',
+            'COMSPEC',
+            'SYSTEMDRIVE',
+            'USERPROFILE',
+            'PHPRC',
+            'PHP_INI_SCAN_DIR',
+            'OPENSSL_CONF',
+        ] as $name) {
+            $value = getenv($name);
+            if ($value !== false) {
+                $environment[$name] = $value;
+            }
+        }
+        $environment['TEMP'] = $temporaryDirectory;
+        $environment['TMP'] = $temporaryDirectory;
+
+        $process = new Process($command, base_path(), $environment);
+        $process->setTimeout(600);
         $process->run();
+
         $stdout = $process->getOutput();
         $stderr = $process->getErrorOutput();
         $metrics = $this->parser->parse($stdout."\n".$stderr);
+        if ($junitPath !== null && is_file($junitPath)) {
+            $metrics['failure_details'] = $this->parseJunitFailures($junitPath)
+                + $metrics['failure_details'];
+            @unlink($junitPath);
+        }
 
         return [
             'command' => $label,
@@ -118,5 +164,41 @@ class NexusValidationService
             'exit_code' => $process->getExitCode(),
             ...$metrics,
         ];
+    }
+
+    /** @return array<int,array{test:string,class:string|null,method:string|null,message:string,file:string|null,line:int|null,trace:string}> */
+    private function parseJunitFailures(string $path): array
+    {
+        $xml = simplexml_load_file($path);
+        if ($xml === false) {
+            return [];
+        }
+
+        $details = [];
+        foreach ($xml->xpath('//testcase[failure or error]') ?: [] as $testCase) {
+            $name = (string) ($testCase['name'] ?? '');
+            $class = (string) ($testCase['class'] ?? '') ?: null;
+            $failure = $testCase->failure ?? $testCase->error;
+            $message = trim((string) ($failure['message'] ?? $failure));
+            $trace = trim((string) $failure);
+            $file = null;
+            $line = null;
+            if (preg_match('/(.*?\.php):(\d+)/', $trace, $location) === 1) {
+                $file = $location[1];
+                $line = (int) $location[2];
+            }
+
+            $details[] = [
+                'test' => $class !== null ? $class.'::'.$name : $name,
+                'class' => $class,
+                'method' => $name !== '' ? $name : null,
+                'message' => $message,
+                'file' => $file,
+                'line' => $line,
+                'trace' => $trace,
+            ];
+        }
+
+        return $details;
     }
 }

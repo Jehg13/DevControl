@@ -26,6 +26,7 @@ class NexusMemoryService
         string $content,
         array $metadata = [],
     ): NexusMessage {
+        $conversation = $this->ensurePersistedConversation($conversation);
         $message = $conversation->messages()->create([
             'role' => $role,
             'content' => $content,
@@ -39,6 +40,23 @@ class NexusMemoryService
         }
 
         return $message;
+    }
+
+    private function ensurePersistedConversation(NexusConversation $conversation): NexusConversation
+    {
+        if ($conversation->exists && NexusConversation::query()->whereKey($conversation->getKey())->exists()) {
+            return $conversation->fresh();
+        }
+
+        return NexusConversation::query()->firstOrCreate(
+            [
+                'session_key' => $conversation->session_key,
+                'usuario_id' => $conversation->usuario_id,
+            ],
+            [
+                'last_activity_at' => now(),
+            ]
+        );
     }
 
     /**
