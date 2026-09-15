@@ -78,9 +78,7 @@ final class NexusActionClassifier
             'valida la implementacion',
             'valida la implementación',
         ])) {
-            $suite = str_contains($text, 'phpunit') ? 'all' : (str_contains($text, 'nexus') ? 'nexus' : 'all');
-
-            return $this->action('test_execution', 'repository', ['suite' => $suite], ['nexus.read'], false);
+            return $this->action('test_execution', 'repository', ['suite' => 'nexus'], ['nexus.read'], false);
         }
 
         if ($this->hasAny($text, ['cambia el texto', 'cambia la vista', 'edita este archivo', 'modifica app/', 'modifica el archivo', 'archivo de la vista', 'reemplaza este texto', 'editar el archivo'])) {

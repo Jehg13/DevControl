@@ -105,6 +105,16 @@ class NexusRuntimeActionsTest extends TestCase
         }
     }
 
+    public function test_project_test_request_uses_only_the_phpunit_validation(): void
+    {
+        $action = (new NexusActionClassifier())->classify(new NexusRuntimeRequest(
+            message: 'Ejecuta las pruebas del proyecto y dime exactamente cuántos tests hubo.'
+        ));
+
+        $this->assertSame('test_execution', $action['action']);
+        $this->assertSame('nexus', $action['arguments']['suite']);
+    }
+
     public function test_unsupported_push_and_rollback_are_recognized_without_execution(): void
     {
         $runtime = app(\App\Nexus\NexusRuntime::class);

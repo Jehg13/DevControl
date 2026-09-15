@@ -6,6 +6,10 @@ use Symfony\Component\Process\Process;
 
 class NexusValidationService
 {
+    public function __construct(private readonly NexusTestResultParser $parser)
+    {
+    }
+
     public function validate(array $files = [], string $suite = 'php'): array
     {
         $checks = [];
@@ -43,21 +47,41 @@ class NexusValidationService
     /** @param array<int, array{command:string,passed:bool,stdout:string,stderr:string,output:string,exit_code:int|null}> $checks */
     private function summarize(array $checks): array
     {
-        $output = implode("\n", array_column($checks, 'output'));
-        $extract = static function (string $pattern) use ($output): ?int {
-            return preg_match($pattern, $output, $matches) === 1 ? (int) $matches[1] : null;
-        };
+        $testChecks = array_values(array_filter(
+            $checks,
+            static fn (array $check): bool => str_contains(
+                strtolower((string) ($check['command'] ?? '')),
+                'artisan test'
+            )
+        ));
+
+        if ($testChecks !== []) {
+            $summary = [];
+            foreach ([
+                'tests', 'assertions', 'failures', 'errors',
+                'skipped', 'incomplete', 'warnings', 'deprecations',
+            ] as $key) {
+                $values = array_map(
+                    static fn (array $check): mixed => $check[$key] ?? null,
+                    $testChecks
+                );
+                $knownValues = array_values(array_filter($values, static fn (mixed $value): bool => $value !== null));
+                $summary[$key] = $knownValues === [] ? null : array_sum($knownValues);
+            }
+
+            return $summary + ['duration' => null];
+        }
 
         return [
-            'tests' => $extract('/Tests:\s+(\d+)/i'),
-            'assertions' => $extract('/Assertions:\s+(\d+)/i'),
-            'failures' => $extract('/Failures:\s+(\d+)/i'),
-            'errors' => $extract('/Errors:\s+(\d+)/i'),
-            'skipped' => $extract('/Skipped:\s+(\d+)/i'),
-            'incomplete' => $extract('/Incomplete:\s+(\d+)/i'),
-            'warnings' => $extract('/Warnings:\s+(\d+)/i'),
-            'deprecations' => $extract('/Deprecations:\s+(\d+)/i'),
-            'duration' => preg_match('/Duration:\s+([0-9.]+s)/i', $output, $matches) === 1 ? $matches[1] : null,
+            'tests' => null,
+            'assertions' => null,
+            'failures' => null,
+            'errors' => null,
+            'skipped' => null,
+            'incomplete' => null,
+            'warnings' => null,
+            'deprecations' => null,
+            'duration' => null,
         ];
     }
 
@@ -78,16 +102,21 @@ class NexusValidationService
     private function run(array $command, string $label): array
     {
         $process = new Process($command, base_path());
-        $process->setTimeout(120);
+        $process->setTimeout(300);
         $process->run();
+        $stdout = $process->getOutput();
+        $stderr = $process->getErrorOutput();
+        $metrics = $this->parser->parse($stdout."\n".$stderr);
 
         return [
             'command' => $label,
             'passed' => $process->isSuccessful(),
-            'stdout' => trim($process->getOutput()),
-            'stderr' => trim($process->getErrorOutput()),
-            'output' => trim($process->getOutput()."\n".$process->getErrorOutput()),
+            'success' => $process->isSuccessful(),
+            'stdout' => trim($stdout),
+            'stderr' => trim($stderr),
+            'output' => trim($stdout."\n".$stderr),
             'exit_code' => $process->getExitCode(),
+            ...$metrics,
         ];
     }
 }
