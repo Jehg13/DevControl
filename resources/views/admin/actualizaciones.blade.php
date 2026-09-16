@@ -266,7 +266,7 @@
                                             <span class="font-mono2 text-[11px] text-gray-600">{{ $actualizacion->created_at->format('H:i') }}</span>
                                         </div>
 
-                                        <p class="mt-2.5 font-semibold text-white">{{ $actualizacion->titulo }}</p>
+                                        <div class="mt-2.5 flex items-start justify-between gap-4"><p class="font-semibold text-white">{{ $actualizacion->titulo }}</p><div class="flex gap-2 text-xs"><a href="{{ route('actualizaciones.edit', $actualizacion) }}" class="text-gray-300 hover:text-white">Editar</a><form method="POST" action="{{ route('actualizaciones.destroy', $actualizacion) }}" onsubmit="return confirm('¿Eliminar esta actualización?')">@csrf @method('DELETE')<button class="text-red-300">Eliminar</button></form></div></div>
 
                                         <ul class="mt-2 space-y-0.5 text-sm text-gray-400">
                                             @foreach (preg_split('/\r\n|\r|\n/', $actualizacion->detalles) as $linea)

@@ -50,4 +50,35 @@ class ActualizacionController extends Controller
             ->route('actualizaciones')
             ->with('success', 'Actualización registrada correctamente.');
     }
+
+    public function edit(Actualizacion $actualizacion)
+    {
+        return view('admin.actualizaciones.edit', [
+            'actualizacion' => $actualizacion->load('proyecto'),
+            'proyectos' => Proyecto::orderBy('nombre')->get(),
+        ]);
+    }
+
+    public function update(Request $request, Actualizacion $actualizacion)
+    {
+        $validado = $request->validate([
+            'proyecto_id' => ['required', 'exists:proyectos,id'],
+            'titulo' => ['required', 'string', 'max:255'],
+            'detalles' => ['required', 'string'],
+            'commit' => ['nullable', 'string', 'max:40'],
+        ]);
+
+        $actualizacion->update($validado);
+
+        return redirect()->route('actualizaciones')
+            ->with('success', 'Actualización actualizada correctamente.');
+    }
+
+    public function destroy(Actualizacion $actualizacion)
+    {
+        $actualizacion->delete();
+
+        return redirect()->route('actualizaciones')
+            ->with('success', 'Actualización eliminada correctamente.');
+    }
 }

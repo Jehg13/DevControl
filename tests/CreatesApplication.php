@@ -16,6 +16,12 @@ trait CreatesApplication
         putenv('APP_ENV=testing');
         putenv('DB_CONNECTION=mysql');
         putenv('DB_DATABASE=devcontrol_testing');
+        $_ENV['APP_ENV'] = 'testing';
+        $_ENV['DB_CONNECTION'] = 'mysql';
+        $_ENV['DB_DATABASE'] = 'devcontrol_testing';
+        $_SERVER['APP_ENV'] = 'testing';
+        $_SERVER['DB_CONNECTION'] = 'mysql';
+        $_SERVER['DB_DATABASE'] = 'devcontrol_testing';
 
         $app = require __DIR__.'/../bootstrap/app.php';
 

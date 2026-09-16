@@ -40,7 +40,7 @@
                     <h1 class="mt-2 font-display text-3xl font-bold">Incidentes</h1>
                     <p class="mt-2 text-sm text-gray-500">Agrupa errores relacionados y sigue su avance hasta resolverlos.</p>
                 </div>
-                <span class="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 font-mono2 text-xs text-emerald-300">Conectado</span>
+                <a href="{{ route('incidentes.create') }}" class="rounded-lg bg-[#d61f2c] px-4 py-2 text-sm font-bold">Nuevo incidente</a>
             </header>
 
             <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -51,7 +51,7 @@
 
             <section class="mt-6 grid gap-6 xl:grid-cols-[1.4fr_1fr]">
                 <article class="rounded-2xl border border-white/10 bg-[#0f0f11] p-5">
-                    <div class="flex items-center justify-between"><div><h2 class="font-display text-lg font-bold">Incidentes activos</h2><p class="mt-1 text-xs text-gray-500">Errores agrupados por causa o impacto.</p></div><span class="font-mono2 text-xs text-gray-600">3 casos</span></div>
+                    <div class="flex items-center justify-between"><div><h2 class="font-display text-lg font-bold">Incidentes activos</h2><p class="mt-1 text-xs text-gray-500">Errores agrupados por causa o impacto.</p></div><span class="font-mono2 text-xs text-gray-600">{{ $incidentes->count() }} casos</span></div>
                     <div class="mt-5 space-y-3">
                         @forelse($incidentes as $incident)
                             <div class="rounded-xl border border-white/5 bg-black/30 p-4">
@@ -59,7 +59,7 @@
                                     <div><div class="flex flex-wrap items-center gap-2"><span class="font-mono2 text-[10px] text-gray-600">INC-{{ str_pad($incident->id, 3, '0', STR_PAD_LEFT) }}</span><span class="rounded-full bg-red-400/10 px-2 py-1 font-mono2 text-[9px] text-red-300">{{ $incident->prioridad }}</span></div><h3 class="mt-2 font-semibold text-white">{{ $incident->titulo }}</h3><p class="mt-1 text-xs text-gray-600">{{ $incident->proyecto->nombre }} · {{ $incident->descripcion ?: 'Sin descripción' }}</p></div>
                                     <span class="shrink-0 rounded-full border border-white/10 px-2.5 py-1 text-[10px] text-gray-400">{{ $incident->estado }}</span>
                                 </div>
-                                <div class="mt-4 h-1.5 overflow-hidden rounded-full bg-white/5"><div class="h-full rounded-full bg-gradient-to-r from-[#d61f2c] to-[#ff5b5b]" style="width: {{ $incident->estado === 'Resuelto' ? '100' : ($incident->estado === 'En resolución' ? '72' : ($incident->estado === 'En investigación' ? '38' : '15')) }}%"></div></div>
+                                <div class="mt-4 flex items-center justify-between gap-3"><div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/5"><div class="h-full rounded-full bg-gradient-to-r from-[#d61f2c] to-[#ff5b5b]" style="width: {{ $incident->estado === 'Resuelto' ? '100' : ($incident->estado === 'En resolución' ? '72' : ($incident->estado === 'En investigación' ? '38' : '15')) }}%"></div></div><div class="flex gap-2 text-xs"><a href="{{ route('incidentes.edit', $incident) }}" class="text-gray-300 hover:text-white">Editar</a><form method="POST" action="{{ route('incidentes.destroy', $incident) }}" onsubmit="return confirm('¿Eliminar este incidente?')">@csrf @method('DELETE')<button class="text-red-300">Eliminar</button></form></div></div>
                             </div>
                         @empty
                             <p class="text-sm text-gray-500">No hay incidencias registradas.</p>

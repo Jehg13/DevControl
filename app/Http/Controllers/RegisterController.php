@@ -25,7 +25,7 @@ class RegisterController extends Controller
             'name' => $datosValidados['name'],
             'email' => $datosValidados['email'],
             'password' => $datosValidados['password'],
-            'rol' => 'admin',
+            'rol' => 'observador',
         ]);
 
         Auth::login($usuario);

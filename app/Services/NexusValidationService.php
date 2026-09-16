@@ -34,7 +34,15 @@ class NexusValidationService
         }
 
         if (in_array($suite, ['nexus', 'all'], true)) {
-            $checks[] = $this->run([PHP_BINARY, 'artisan', 'test', '--filter=Nexus'], 'php artisan test --filter=Nexus');
+            $checks[] = $this->run(
+                [PHP_BINARY, 'artisan', 'test', '--env=testing', '--filter=Nexus'],
+                'php artisan test --env=testing --filter=Nexus',
+                [
+                    'APP_ENV' => 'testing',
+                    'DB_CONNECTION' => 'mysql',
+                    'DB_DATABASE' => 'devcontrol_testing',
+                ]
+            );
         }
 
         $summary = $this->summarize($checks);
@@ -107,7 +115,7 @@ class NexusValidationService
         return $path;
     }
 
-    private function run(array $command, string $label): array
+    private function run(array $command, string $label, ?array $environment = null): array
     {
         $temporaryDirectory = storage_path('framework/testing');
         if (! is_dir($temporaryDirectory) && ! mkdir($temporaryDirectory, 0775, true) && ! is_dir($temporaryDirectory)) {

@@ -21,12 +21,17 @@ class LoginCcontroller extends Controller
 
         $request->session()->regenerate();
 
-        $usuario = Auth::User();
+        $usuario = Auth::user();
 
-      return match($usuario->rol){
-        'admin' => redirect()->route('dashboard'),
-        default => abort(403,'Rol de usuario invalido')
-    };
+        if (! in_array($usuario->rol, User::ROLES, true)) {
+            Auth::logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            abort(403, 'El rol de usuario no está permitido.');
+        }
+
+        return redirect()->route('dashboard');
 }
 }
    

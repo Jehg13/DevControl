@@ -13,7 +13,9 @@ class CheckRole
     {
         $usuario = Auth::user();
 
-        if (!$usuario || $usuario->rol !== $role) {
+        $rolesPermitidos = array_filter(array_map('trim', explode(',', $role)));
+
+        if (!$usuario || ! in_array($usuario->rol, $rolesPermitidos, true)) {
             abort(403, 'No tienes los permisos requeridos para acceder a esta sección.');
         }
 

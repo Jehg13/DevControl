@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">@vite(['resources/css/app.css', 'resources/js/app.js'])<title>DevControl | {{ $bug->folio }}</title></head>
+<body class="min-h-screen bg-black text-white"><main class="mx-auto max-w-3xl px-5 py-8 sm:px-8">
+<div class="mb-6 flex items-center justify-between"><div><p class="font-mono2 text-xs text-[#ff5b5b]">{{ $bug->folio }}</p><h1 class="mt-2 font-display text-3xl font-bold">{{ $bug->titulo }}</h1></div><a href="{{ route('bugs.index') }}" class="rounded-lg border border-white/10 px-4 py-2 text-sm">Volver</a></div>
+<article class="space-y-4 rounded-2xl border border-white/10 bg-[#0f0f11] p-6"><p class="text-gray-300">{{ $bug->descripcion ?: 'Sin descripción.' }}</p><dl class="grid gap-3 text-sm sm:grid-cols-2"><div><dt class="text-gray-500">Proyecto</dt><dd>{{ $bug->proyecto->nombre }}</dd></div><div><dt class="text-gray-500">Estado</dt><dd>{{ $bug->estado }}</dd></div><div><dt class="text-gray-500">Prioridad</dt><dd>{{ $bug->prioridad }}</dd></div><div><dt class="text-gray-500">Detectado</dt><dd>{{ optional($bug->fecha_detectado)->format('d/m/Y') }}</dd></div></dl><a href="{{ route('bugs.edit', $bug) }}" class="inline-block rounded-lg bg-[#d61f2c] px-4 py-2 text-sm font-bold">Editar</a></article>
+</main></body></html>
