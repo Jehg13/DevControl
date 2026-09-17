@@ -23,7 +23,7 @@ class NexusScanCommand extends Command
             $result = $tools->execute(
                 'nexus.audit.scan',
                 ['project_id' => $project ? (int) $project : null],
-                new NexusToolContext(source: 'artisan', system: true)
+                NexusToolContext::core('artisan')
             );
 
             if (! $result->successful) {

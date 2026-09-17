@@ -46,7 +46,7 @@ class NexusWatchCommand extends Command
                 $result = $tools->execute(
                     'nexus.audit.scan',
                     [],
-                    new NexusToolContext(source: 'artisan', system: true)
+                    NexusToolContext::core('artisan')
                 );
 
                 if (! $result->successful) {

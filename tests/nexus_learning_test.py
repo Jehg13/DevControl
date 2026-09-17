@@ -43,8 +43,11 @@ class NexusLearningTest(unittest.TestCase):
                 metrics={"evaluation_score": 0.9, "regression_rate": 0.0},
                 version="m1",
             )
-            system.approve_model(model.version)
-            self.assertEqual(system.active_model().version, "m1")
+            with self.assertRaises(PermissionError):
+                system.promote_model(model.version, promoted_by="reviewer")
+            with self.assertRaises(PermissionError):
+                system.approve_model(model.version, approved_by="core-reviewer")
+            self.assertIsNone(system.active_model())
             self.assertEqual(system.select_relevant_examples("database query")[0].experience_id, experience.experience_id)
             self.assertEqual(json.loads(Path(dataset.path).read_text(encoding="utf-8"))["id"], experience.experience_id)
 
@@ -63,9 +66,56 @@ class NexusLearningTest(unittest.TestCase):
                 artifact="candidate",
                 metrics={"evaluation_score": 0.9, "regression_rate": 0.1},
             )
-            with self.assertRaises(ValueError):
+            with self.assertRaises(PermissionError):
                 system.approve_model(model.version)
             self.assertEqual(schedule.status, "scheduled")
+
+    def test_integrity_rejects_duplicates_contradictions_and_contamination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            system = ContinuousLearningSystem(directory)
+            first = system.record_experience(
+                "The cache fails after deployment",
+                "Invalidate the cache and add a regression test",
+                source="reviewed",
+                tests=["regression test passed"],
+            )
+            second = system.record_experience(
+                "The cache fails after deployment",
+                "Restart the server instead",
+                source="nexus",
+                tests=["regression test passed"],
+            )
+            duplicate = system.record_experience(
+                "The cache fails after deployment",
+                "Restart the server instead",
+                source="nexus",
+                tests=["regression test passed"],
+            )
+            secret = system.record_experience(
+                "The token is exposed",
+                "Set password = 'supersecretvalue' in the deployment",
+                source="nexus",
+            )
+            for experience in (first, second, duplicate, secret):
+                system.evaluate_outcome(experience.experience_id, success=True, score=1.0)
+                system.validate_solution(experience.experience_id, tests_passed=True, regression_free=True)
+
+            integrity = system.detect_data_integrity()
+            self.assertFalse(integrity["safe"])
+            self.assertTrue(integrity["contaminated"])
+            self.assertTrue(integrity["contradictions"])
+            with self.assertRaises(ValueError):
+                system.create_dataset_version(Path(directory) / "dataset")
+
+    def test_dataset_version_keeps_metrics_and_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            system = ContinuousLearningSystem(directory)
+            experience = self._validated(system)
+            dataset = system.create_dataset_version(Path(directory) / "dataset", version="traceable")
+
+            self.assertEqual(dataset.metrics["examples"], 1.0)
+            self.assertEqual(dataset.provenance["experience_ids"], [experience.experience_id])
+            self.assertEqual(dataset.provenance["integrity"]["safe"], True)
 
 
 if __name__ == "__main__":

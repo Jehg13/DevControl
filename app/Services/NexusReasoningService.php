@@ -15,11 +15,14 @@ use Throwable;
 
 class NexusReasoningService
 {
+    private readonly NexusCognitiveSecurityBoundary $boundary;
+
     public function __construct(
         private readonly NexusModel $model,
         private readonly NexusToolRegistry $tools,
-        private readonly ?NexusSecurityBoundary $security = null,
+        ?NexusCognitiveSecurityBoundary $boundary = null,
     ) {
+        $this->boundary = $boundary ?? new NexusCognitiveSecurityBoundary($tools);
     }
 
     public function reason(
@@ -27,15 +30,13 @@ class NexusReasoningService
         array $context = [],
         array $history = [],
         array $toolResults = [],
-        ?array $availableTools = null,
     ): NexusReasoningResult {
         try {
-            $tools = $availableTools ?? $this->tools->definitions();
             $response = $this->model->complete(new NexusModelRequest(
                 identity: NexusIdentity::prompt(),
                 message: $message,
                 context: $context,
-                tools: $tools,
+                tools: $this->tools->definitions(),
                 history: $history,
                 toolResults: $toolResults,
             ));
@@ -68,7 +69,6 @@ class NexusReasoningService
 
         $requiresConfirmation = $response->requiresConfirmation;
 
-        $allowedTools = array_column($this->tools->definitions(), 'name');
         foreach ($response->toolCalls as $call) {
             if (! is_array($call) || ! isset($call['name'], $call['arguments'])) {
                 throw new NexusModelException(
@@ -84,13 +84,13 @@ class NexusReasoningService
                     'invalid_tool_arguments'
                 );
             }
-            ($this->security ?? new NexusSecurityBoundary())->assertToolCall(
-                (string) $call['name'],
-                $call['arguments'],
-                $allowedTools
-            );
 
             $requiresConfirmation = $requiresConfirmation || $tool->requiresConfirmation();
+        }
+
+        $boundaryErrors = $this->boundary->validateModelToolCalls($response->toolCalls, false);
+        if ($boundaryErrors !== []) {
+            throw new NexusModelException(implode('; ', $boundaryErrors), 'cognitive_boundary_violation');
         }
 
         return new NexusModelResponse(

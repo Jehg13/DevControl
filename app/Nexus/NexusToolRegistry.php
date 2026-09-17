@@ -4,7 +4,6 @@ namespace App\Nexus;
 
 use App\Contracts\NexusTool;
 use App\Exceptions\NexusToolException;
-use App\Services\NexusSecurityBoundary;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -14,7 +13,7 @@ final class NexusToolRegistry
     private array $tools = [];
 
     /** @param iterable<NexusTool> $tools */
-    public function __construct(iterable $tools = [], private readonly ?NexusSecurityBoundary $security = null)
+    public function __construct(iterable $tools = [])
     {
         foreach ($tools as $tool) {
             $this->register($tool);
@@ -23,13 +22,6 @@ final class NexusToolRegistry
 
     public function register(NexusTool $tool): self
     {
-        if (isset($this->tools[$tool->name()])) {
-            throw new NexusToolException(
-                "La herramienta [{$tool->name()}] ya está registrada.",
-                'duplicate_tool'
-            );
-        }
-
         $this->tools[$tool->name()] = $tool;
 
         return $this;
@@ -44,7 +36,6 @@ final class NexusToolRegistry
                 'description' => $tool->description(),
                 'parameters' => $tool->parameters(),
                 'permissions' => $tool->permissions(),
-                'risk_level' => app(\App\Services\NexusPermissionManager::class)->risk($tool->name(), $tool->permissions()),
                 'requires_confirmation' => $tool->requiresConfirmation(),
             ],
             $this->tools
@@ -63,13 +54,15 @@ final class NexusToolRegistry
     public function execute(string $name, array $parameters = [], ?NexusToolContext $context = null): NexusToolResult
     {
         try {
-            ($this->security ?? app(NexusSecurityBoundary::class))->assertToolCall(
-                $name,
-                $parameters,
-                array_keys($this->tools)
-            );
+            $resolvedContext = $context ?? new NexusToolContext();
+            if ($resolvedContext->system && ! $resolvedContext->isTrustedSystem()) {
+                return NexusToolResult::failure(
+                    'untrusted_system_context',
+                    'El contexto de sistema no tiene un origen Core confiable.'
+                );
+            }
 
-            return $this->get($name)->execute($parameters, $context ?? new NexusToolContext());
+            return $this->get($name)->execute($parameters, $resolvedContext);
         } catch (NexusToolException $exception) {
             return NexusToolResult::failure(
                 $exception->errorCode,
