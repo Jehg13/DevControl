@@ -29,6 +29,7 @@ class NexusAiPythonBridge
         try {
             $response = $this->transport->send($payload);
             $response = $this->resolveDataRequests($response, $payload, $request);
+            $response = $this->executeProposedActions($response, $payload, $request, $requestId);
             $result = $this->fromPythonResponse($response, $requestId);
             Log::info('Nexus Python request completed.', [
                 'request_id' => $requestId,
@@ -112,100 +113,296 @@ class NexusAiPythonBridge
         }
 
         if (! is_array($response['interpretation']) || ! is_string($response['response'])) {
+            throw new NexusAiTransportException(
+                'invalid_response',
+                'El motor Python devolvió tipos de datos inválidos.'
+            );
+        }
+
+        foreach (['context_used', 'plan', 'proposed_actions', 'errors'] as $arrayField) {
+            if (isset($response[$arrayField]) && ! is_array($response[$arrayField])) {
                 throw new NexusAiTransportException(
                     'invalid_response',
-                    'El motor Python devolvió tipos de datos inválidos.'
+                    'El campo '.$arrayField.' de la respuesta Python debe ser un arreglo.'
                 );
+            }
         }
-        foreach (['context_used', 'plan', 'proposed_actions', 'errors'] as $arrayField) {
-                if (isset($response[$arrayField]) && ! is_array($response[$arrayField])) {
-                    throw new NexusAiTransportException(
-                        'invalid_response',
-                        'El campo '.$arrayField.' de la respuesta Python debe ser un arreglo.'
-                    );
-                }
-        }
+
+        $proposals = $this->normalizeToolProposals($response['proposed_actions'] ?? []);
+        $source = 'nexus_python';
 
         $interpretation = $response['interpretation'];
         $contextUsed = $response['context_used'] ?? [];
+
         return new NexusRuntimeResponse(
-                finalMessage: $response['response'],
-                intent: (string) ($interpretation['intent'] ?? 'general'),
-                evidence: $response['evidence'] ?? $contextUsed['facts'] ?? [],
-                toolsUsed: [],
-                certainty: strtoupper((string) ($interpretation['confidence'] ?? 'INSUFICIENTE')),
-                missingInformation: $response['errors'] ?? [],
-                errors: [],
-                actions: $response['proposed_actions'] ?? [],
-                plan: $response['plan'] ?? [],
-                correlation: ['request_id' => $requestId],
-                status: (string) $response['status'],
-                source: 'nexus_python',
+            finalMessage: $response['response'],
+            intent: (string) ($interpretation['intent'] ?? 'general'),
+            evidence: $response['evidence'] ?? $contextUsed['facts'] ?? [],
+            toolsUsed: array_values(array_filter(array_map(
+                static fn (array $proposal): ?string => $proposal['tool'] ?? null,
+                $proposals
+            ))),
+            certainty: strtoupper((string) ($interpretation['confidence'] ?? 'INSUFICIENTE')),
+            missingInformation: $response['errors'] ?? [],
+            errors: [],
+            actions: $proposals,
+            plan: $response['plan'] ?? [],
+            correlation: [
+                'request_id' => $requestId,
+                'proposals' => array_map(static fn (array $proposal): array => [
+                    'tool' => $proposal['tool'],
+                    'operation' => $proposal['operation'] ?? 'read',
+                    'correlation_id' => $proposal['correlation_id'] ?? $requestId,
+                ], $proposals),
+            ],
+            status: (string) $response['status'],
+            source: $source,
         );
+    }
+
+    private function normalizeToolProposals(array $actions): array
+    {
+        if ($actions === []) {
+            return [];
+        }
+
+        return array_map(function ($proposal): array {
+            if (! is_array($proposal)) {
+                throw new NexusAiTransportException('invalid_tool_proposal', 'La propuesta de herramienta tiene un formato inválido.');
+            }
+
+            $tool = (string) ($proposal['tool'] ?? $proposal['tool_name'] ?? '');
+            if ($tool === '') {
+                throw new NexusAiTransportException('invalid_tool_proposal', 'La propuesta de herramienta no incluye nombre de herramienta.');
+            }
+
+            $arguments = is_array($proposal['arguments'] ?? $proposal['parameters'] ?? null)
+                ? ($proposal['arguments'] ?? $proposal['parameters'])
+                : [];
+            $permissions = is_array($proposal['permissions'] ?? null)
+                ? array_values(array_filter(array_map('strval', $proposal['permissions']), static fn (string $permission): bool => $permission !== ''))
+                : [];
+            $operation = strtolower((string) ($proposal['operation'] ?? 'read'));
+            if (! in_array($operation, ['read', 'write', 'delete'], true)) {
+                $operation = 'read';
+            }
+
+            $this->validateToolProposal($tool, $arguments, $permissions, $operation, $proposal);
+
+            return [
+                'tool' => $tool,
+                'arguments' => $arguments,
+                'permissions' => $permissions,
+                'requires_confirmation' => (bool) ($proposal['requires_confirmation'] ?? ($operation !== 'read')),
+                'operation' => $operation,
+                'correlation_id' => (string) ($proposal['correlation_id'] ?? $proposal['correlationId'] ?? ''),
+                'source' => (string) ($proposal['source'] ?? 'nexus_ai_python'),
+                'executable' => (bool) ($proposal['executable'] ?? false),
+                'confirmed' => (bool) ($proposal['confirmed'] ?? false),
+                'status' => (string) ($proposal['status'] ?? 'proposed'),
+            ];
+        }, $actions);
+    }
+
+    private function validateToolProposal(string $tool, array $arguments, array $permissions, string $operation, array $proposal): void
+    {
+        if (! $this->tools->get($tool)) {
+            throw new NexusAiTransportException('tool_not_found', 'La herramienta propuesta no existe: '.$tool.'.');
+        }
+
+        $allowed = array_keys(array_fill_keys($this->tools->definitions(), ''));
+        if (isset($allowed[0])) {
+            $registered = collect($this->tools->definitions())->pluck('name')->all();
+            if (! in_array($tool, $registered, true)) {
+                throw new NexusAiTransportException('tool_not_found', 'La herramienta propuesta no está registrada: '.$tool.'.');
+            }
+        }
+
+        foreach (['permission', 'policy', 'restriction', 'weights', 'training'] as $reservedKey) {
+            if (array_key_exists($reservedKey, $arguments)) {
+                throw new NexusAiTransportException('protected_argument', 'La propuesta de herramienta intenta manipular un argumento protegido: '.$reservedKey.'.');
+            }
+        }
+
+        $definition = collect($this->tools->definitions())->firstWhere('name', $tool);
+        if (! is_array($definition)) {
+            throw new NexusAiTransportException('tool_not_registered', 'La herramienta propuesta no está registrada: '.$tool.'.');
+        }
+
+        $declaredPermissions = array_values(array_filter((array) ($definition['permissions'] ?? []), 'is_string'));
+        $effectivePermissions = array_values(array_unique(array_filter(array_merge($declaredPermissions, $permissions), 'is_string')));
+        if ($operation === 'delete' && ! in_array('nexus.write', $effectivePermissions, true) && ! in_array('destructive_action', $effectivePermissions, true)) {
+            throw new NexusAiTransportException('privilege_escalation', 'DELETE requiere permisos de destrucción explícitos.');
+        }
+
+        if (($proposal['source'] ?? 'nexus_ai_python') !== 'nexus_ai_python') {
+            throw new NexusAiTransportException('invalid_proposal_origin', 'La propuesta de herramienta no tiene origen confiable.');
+        }
+
+        if (($proposal['executable'] ?? false) === true) {
+            throw new NexusAiTransportException('non_executable_proposal', 'Python no puede ejecutar directamente la herramienta propuesta.');
+        }
     }
 
     private function resolveDataRequests(array $response, array $payload, NexusRuntimeRequest $request): array
     {
-                $queries = $response['data_requests'] ?? [];
-                if (! is_array($queries) || $queries === []) {
-                    return $response;
-                }
+        $queries = $response['data_requests'] ?? [];
+        if (! is_array($queries) || $queries === []) {
+            return $response;
+        }
 
-                $data = [];
-                $toolResults = [];
-                foreach ($queries as $query) {
-                    if (! is_array($query) || ! isset($query['entity'], $query['operation'])) {
-                        throw new NexusAiTransportException('invalid_data_request', 'Python devolvió una solicitud de datos inválida.');
-                    }
-                    $query = $this->validateDataQuery($query);
-                    $projectName = $query['filters']['project_name'] ?? null;
-                    foreach ($this->dataCalls($query, $request) as $call) {
-                        if ($projectName !== null && $call['entity'] !== 'proyecto' && ($call['arguments']['project_id'] ?? null) === null) {
-                            $projects = $data['proyecto'] ?? [];
-                            $project = collect($projects)->first(
-                                fn ($item): bool => is_array($item)
-                                    && strcasecmp((string) ($item['nombre'] ?? ''), (string) $projectName) === 0
-                            );
-                            if ($project !== null) {
-                                $call['arguments']['project_id'] = (int) $project['id'];
-                            } else {
-                                $data[$call['entity']] = [];
-                                continue;
-                            }
-                        }
-                        $tool = $this->tools->get($call['tool']);
-                        if ($tool->requiresConfirmation() || in_array('devcontrol.write', $tool->permissions(), true)) {
-                            throw new NexusAiTransportException('data_request_not_read_only', 'La consulta solicitada no es de solo lectura.');
-                        }
-                        $result = $this->tools->execute(
-                            $call['tool'],
-                            $call['arguments'],
-                            new \App\Nexus\NexusToolContext(
-                                user: $request->user,
-                                source: 'python_data_query',
-                                grantedPermissions: $payload['permissions'] ?? [],
-                                projectId: $request->projectId,
-                            )
-                        );
-                        $toolResult = [
-                            'ok' => $result->successful,
-                            'data' => $result->data,
-                            'error' => $result->successful ? null : ['message' => $result->error],
-                            'meta' => ['entity' => $call['entity'], 'tool' => $call['tool']],
-                        ];
-                        $toolResults[] = $toolResult;
-                        if ($result->successful) {
-                            $data[$call['entity']] = $result->data;
-                        }
+        $data = [];
+        $toolResults = [];
+        foreach ($queries as $query) {
+            if (! is_array($query) || ! isset($query['entity'], $query['operation'])) {
+                throw new NexusAiTransportException('invalid_data_request', 'Python devolvió una solicitud de datos inválida.');
+            }
+            $query = $this->validateDataQuery($query);
+            $projectName = $query['filters']['project_name'] ?? null;
+            foreach ($this->dataCalls($query, $request) as $call) {
+                if ($projectName !== null && $call['entity'] !== 'proyecto' && ($call['arguments']['project_id'] ?? null) === null) {
+                    $projects = $data['proyecto'] ?? [];
+                    $project = collect($projects)->first(
+                        fn ($item): bool => is_array($item)
+                            && strcasecmp((string) ($item['nombre'] ?? ''), (string) $projectName) === 0
+                    );
+                    if ($project !== null) {
+                        $call['arguments']['project_id'] = (int) $project['id'];
+                    } else {
+                        $data[$call['entity']] = [];
+                        continue;
                     }
                 }
+                $tool = $this->tools->get($call['tool']);
+                if ($tool->requiresConfirmation() || in_array('devcontrol.write', $tool->permissions(), true)) {
+                    throw new NexusAiTransportException('data_request_not_read_only', 'La consulta solicitada no es de solo lectura.');
+                }
+                $result = $this->tools->execute(
+                    $call['tool'],
+                    $call['arguments'],
+                    new \App\Nexus\NexusToolContext(
+                        user: $request->user,
+                        source: 'python_data_query',
+                        grantedPermissions: $payload['permissions'] ?? [],
+                        projectId: $request->projectId,
+                    )
+                );
+                $toolResult = [
+                    'ok' => $result->successful,
+                    'data' => $result->data,
+                    'error' => $result->successful ? null : ['message' => $result->error],
+                    'meta' => ['entity' => $call['entity'], 'tool' => $call['tool']],
+                ];
+                $toolResults[] = $toolResult;
+                if ($result->successful) {
+                    $data[$call['entity']] = $result->data;
+                }
+            }
+        }
 
-                $followUp = $payload;
-                $followUp['context']['values']['data'] = $data;
-                $followUp['context']['values']['tool_results'] = $toolResults;
-                $followUp['metadata']['data_resolved'] = true;
+        $followUp = $payload;
+        $followUp['context']['values']['data'] = $data;
+        $followUp['context']['values']['tool_results'] = $toolResults;
+        $followUp['metadata']['data_resolved'] = true;
 
-                return $this->transport->send($followUp);
+        return $this->transport->send($followUp);
+    }
+
+    private function executeProposedActions(array $response, array $payload, NexusRuntimeRequest $request, string $requestId): array
+    {
+        $actions = $response['proposed_actions'] ?? [];
+        if (! is_array($actions) || $actions === []) {
+            return $response;
+        }
+
+        $permissionManager = app(NexusPermissionManager::class);
+        $securityBoundary = app(NexusSecurityBoundary::class);
+        $registeredTools = array_values(array_map(
+            static fn (array $tool): string => (string) ($tool['name'] ?? ''),
+            $this->tools->definitions()
+        ));
+
+        $executed = [];
+        foreach ($this->normalizeToolProposals($actions) as $proposal) {
+            $toolName = $proposal['tool'];
+            $tool = $this->tools->get($toolName);
+            $correlationId = $proposal['correlation_id'] ?: $requestId;
+            $arguments = $proposal['arguments'];
+
+            $securityBoundary->assertToolCall($toolName, $arguments, $registeredTools);
+
+            $effectivePermissions = $proposal['permissions'] !== []
+                ? $proposal['permissions']
+                : $tool->permissions();
+
+            $permissionContext = new \App\Nexus\NexusToolContext(
+                user: $request->user,
+                source: 'nexus_ai_python',
+                confirmed: (bool) ($proposal['confirmed'] ?? false),
+                grantedPermissions: $payload['permissions'] ?? [],
+                runId: null,
+                projectId: $request->projectId,
+                toolName: $toolName,
+            );
+
+            $auditId = $permissionManager->authorize(
+                $toolName,
+                $effectivePermissions,
+                $arguments,
+                $permissionContext,
+                (bool) $proposal['requires_confirmation']
+            );
+
+            if ($auditId > 0 && $permissionManager->requiresApproval($toolName, $effectivePermissions, $permissionContext, (bool) $proposal['requires_confirmation'])) {
+                $executed[] = [
+                    'tool' => $toolName,
+                    'status' => 'awaiting_confirmation',
+                    'operation' => $proposal['operation'],
+                    'correlation_id' => $correlationId,
+                    'requires_confirmation' => true,
+                    'source' => 'laravel_permission_manager',
+                    'audit_id' => $auditId,
+                ];
+                continue;
+            }
+
+            $result = $this->tools->execute($toolName, $arguments, new \App\Nexus\NexusToolContext(
+                user: $request->user,
+                source: 'laravel_tool_registry',
+                confirmed: (bool) ($proposal['confirmed'] ?? false),
+                grantedPermissions: $effectivePermissions,
+                runId: $auditId,
+                projectId: $request->projectId,
+                toolName: $toolName,
+            ));
+
+            $permissionManager->complete($auditId, $result->successful, [
+                'result' => $result->toArray(),
+                'origin' => 'laravel_tool_registry',
+                'correlation_id' => $correlationId,
+                'source' => 'nexus_ai_python',
+            ]);
+
+            $executed[] = [
+                'tool' => $toolName,
+                'status' => $result->successful ? 'completed' : 'failed',
+                'operation' => $proposal['operation'],
+                'correlation_id' => $correlationId,
+                'result' => $result->toArray(),
+                'requires_confirmation' => $proposal['requires_confirmation'],
+                'source' => 'laravel_tool_registry',
+                'audit_id' => $auditId,
+                'origin' => 'laravel_tool_registry',
+            ];
+        }
+
+        $response['proposed_actions'] = $executed;
+        $response['tool_results'] = array_values(array_filter(array_map(
+            static fn (array $entry): ?array => $entry['result'] ?? null,
+            $executed
+        )));
+
+        return $response;
     }
 
     private function dataCalls(array $query, NexusRuntimeRequest $request): array

@@ -38,6 +38,7 @@ class NexusTokenizerTest(unittest.TestCase):
             self.tokenizer.save(path, ["abc"])
             loaded = NexusTokenizer.load(path)
             self.assertEqual(loaded.encode(self.texts[1]), self.tokenizer.encode(self.texts[1]))
+            self.assertEqual(loaded.context_window, self.tokenizer.context_window)
             path.write_text(path.read_text(encoding="utf-8").replace('"vocab_size":', '"vocab_size": 999, "ignored":'), encoding="utf-8")
             with self.assertRaises(ValueError):
                 NexusTokenizer.load(path)
@@ -46,6 +47,12 @@ class NexusTokenizerTest(unittest.TestCase):
         first = NexusTokenizer.train(self.texts, vocab_size=512, min_frequency=1)
         second = NexusTokenizer.train(self.texts, vocab_size=512, min_frequency=1)
         self.assertEqual(first.to_dict(["corpus"]), second.to_dict(["corpus"]))
+
+    def test_context_window_and_attention_mask_are_supported(self):
+        ids, mask = self.tokenizer.encode_with_attention(self.texts[0], max_length=16, padding=True, truncation=True)
+        self.assertEqual(len(ids), len(mask))
+        self.assertEqual(len(ids), 16)
+        self.assertEqual(mask.count(1), len(ids))
 
 
 if __name__ == "__main__":

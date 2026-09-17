@@ -18,8 +18,10 @@ storage/app/nexus-model/latest.json
 storage/app/nexus-model/tokenizer.json
 ```
 
-Se pueden cambiar con `NEXUS_LOCAL_CHECKPOINT`, `NEXUS_LOCAL_TOKENIZER` y
-`NEXUS_LOCAL_PYTHON`. Laravel usa el adaptador local cuando:
+Se pueden cambiar con `NEXUS_AI_MODEL_PATH`, `NEXUS_AI_TOKENIZER_PATH` y
+`NEXUS_LOCAL_PYTHON` (los nombres heredados `NEXUS_LOCAL_CHECKPOINT` y
+`NEXUS_LOCAL_TOKENIZER` siguen siendo compatibles). Laravel usa el adaptador local
+cuando:
 
 ```env
 NEXUS_AI_ENABLED=true
@@ -27,6 +29,18 @@ NEXUS_AI_DRIVER=local
 ```
 
 El proveedor `local` no hace ninguna petición de red.
+
+El checkpoint debe tener formato `nexus-micro-checkpoint-v1`, generado por
+`nexus_training.trainer`, y contener un modelo con `vocab_size`, `hidden_size`,
+`embeddings` y `output`. El tokenizer debe tener formato `nexus-byte-bpe`,
+incluyendo su hash de integridad. Ambos artefactos deben compartir exactamente el
+mismo tamaño de vocabulario.
+
+El loader Python valida y carga ambos artefactos una sola vez por proceso Python.
+`NexusAiApplication` conserva el modelo cargado y combina el contexto estructurado
+de NLP, memoria, conocimiento, razonamiento y planificación con la inferencia.
+Python solo genera texto y nunca ejecuta herramientas; Laravel mantiene la
+autorización y la ejecución.
 
 ## Runtime directo
 
@@ -66,6 +80,17 @@ El runtime aplica:
 La inferencia local genera texto. No decide permisos ni ejecuta herramientas: esas
 decisiones continúan bajo Nexus Core, `NexusReasoningService` y el Permission Manager.
 
+## Comprobación
+
+```powershell
+php artisan nexus:ai-health
+php artisan nexus:ai-health --json
+```
+
+El comando distingue `ENABLED`, disponibilidad de Python, existencia y carga del
+modelo/tokenizer e `INFERENCE READY`. Si falta un artefacto, devuelve
+`model_unavailable` sin generar una respuesta simulada.
+
 ## Optimización y comparación
 
 El checkpoint original no se modifica. Para comparar el modo normal contra el
@@ -90,3 +115,18 @@ NEXUS_LOCAL_QUANTIZATION=none
 No se activa GPU, compilación ni KV cache: este runtime dependency-free no detecta
 un backend local de GPU y el micro-modelo actual solo usa el último token, por lo
 que una KV cache real no aplica a su arquitectura.
+
+## Entrenamiento reproducible
+
+El preparador local usa únicamente JSONL bajo `nexus_ai/fundamentals` y genera
+splits separados, además de `approval.json`, antes de entrenar:
+
+```powershell
+$env:NEXUS_DATASET_APPROVAL_KEY="clave-local"
+python scripts/prepare_nexus_local_model.py
+```
+
+El resumen persistido incluye tokens por split, `final_validation_loss` y
+`final_test_loss`. El modelo resultante es un artefacto experimental para
+generación local; los datos factuales de DevControl deben seguir resolviéndose
+mediante el pipeline autorizado de Laravel.

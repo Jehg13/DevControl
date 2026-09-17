@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from nexus_inference import InferenceConfig, LocalInferenceRuntime
-from nexus_inference.runtime import InferenceCancelled, request_from_payload
+from nexus_ai.models import InferenceEngine, ModelLoader, ModelLoadError
+from nexus_inference import InferenceConfig
+from nexus_inference.runtime import InferenceCancelled
 
 
 def main() -> int:
@@ -24,10 +25,11 @@ def main() -> int:
     parser.add_argument("--logits-cache-size", type=int, default=1024)
     parser.add_argument("--quantization", choices=("none", "int8"), default="none")
     args = parser.parse_args()
-    runtime = LocalInferenceRuntime(
-        args.checkpoint,
-        args.tokenizer,
-        InferenceConfig(
+    try:
+        loader = ModelLoader(
+            args.checkpoint,
+            args.tokenizer,
+            InferenceConfig(
             max_context_tokens=args.max_context_tokens,
             max_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
@@ -36,14 +38,22 @@ def main() -> int:
             timeout_seconds=args.timeout,
             logits_cache_size=args.logits_cache_size,
             quantization=args.quantization,
-        ),
-    )
+            ),
+        )
+        engine = InferenceEngine(loader.load())
+    except ModelLoadError as error:
+        print(json.dumps({"event": "error", "code": error.code, "error": str(error)}), flush=True)
+        return 2
     for line in sys.stdin:
         if not line.strip():
             continue
         try:
             payload = json.loads(line)
-            request_from_payload(runtime=runtime, payload=payload, emit=lambda event: print(json.dumps(event, ensure_ascii=True), flush=True))
+            result = engine.generate(
+                str(payload.get("prompt", "")),
+                payload.get("context", {}),
+            )
+            print(json.dumps({"event": "complete", "result": result}, ensure_ascii=True), flush=True)
         except (InferenceCancelled, TimeoutError, ValueError, OSError, json.JSONDecodeError) as error:
             print(json.dumps({"event": "error", "error": str(error)}), flush=True)
     return 0

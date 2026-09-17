@@ -12,6 +12,8 @@ from nexus_ai.reasoning import NexusReasoner, ReasoningRequest
 from nexus_ai.responses import NexusResponseGenerator, ResponseInput
 from nexus_ai.grounding import GroundingValidator
 from nexus_ai.semantic import SemanticQueryBuilder
+from nexus_ai.models import InferenceEngine, ModelLoadError, ModelLoader
+from nexus_inference import InferenceConfig
 
 
 class NexusAiApplication:
@@ -28,6 +30,21 @@ class NexusAiApplication:
                 ),
             )
         )
+        self.inference_engine = None
+        self.model_error = None
+        if os.getenv("NEXUS_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+            try:
+                loader = ModelLoader(
+                    os.getenv("NEXUS_AI_MODEL_PATH", "storage/app/nexus-model/latest.json"),
+                    os.getenv("NEXUS_AI_TOKENIZER_PATH", "storage/app/nexus-model/tokenizer.json"),
+                    InferenceConfig(
+                        timeout_seconds=float(os.getenv("NEXUS_LOCAL_TIMEOUT", "30")),
+                        max_new_tokens=int(os.getenv("NEXUS_LOCAL_MAX_NEW_TOKENS", "128")),
+                    ),
+                )
+                self.inference_engine = InferenceEngine(loader.load())
+            except ModelLoadError as error:
+                self.model_error = {"code": error.code, "message": str(error)}
 
     def handle(self, request: NexusAiRequest) -> NexusAiResponse:
         values = request.context.values
@@ -110,6 +127,55 @@ class NexusAiApplication:
                 conversation=[{"role": turn.role, "content": turn.content} for turn in request.conversation],
             )
         )
+        if self.model_error is not None:
+            return NexusAiResponse(
+                interpretation=Interpretation(
+                    intent=reasoning.interpretation.get("intent", "unclassified"),
+                    entities=reasoning.interpretation.get("entities", {}),
+                    confidence=reasoning.interpretation.get("confidence", "low"),
+                ),
+                context_used=snapshot.to_dict(),
+                plan=[step.to_dict() for step in plan_result.steps],
+                response="",
+                status="model_unavailable",
+                errors=[self.model_error["message"]],
+                data_requests=data_requests,
+                evidence=grounding.evidence,
+                grounding=grounding.to_dict(),
+            )
+        response_text = rendered.text
+        response_status = rendered.status
+        if self.inference_engine is not None:
+            try:
+                local_result = self.inference_engine.generate(
+                    request.message,
+                    {
+                        "context": snapshot.to_dict(),
+                        "reasoning": reasoning.to_dict(),
+                        "plan": [step.to_dict() for step in plan_result.steps],
+                        "evidence": grounding.evidence,
+                    },
+                )
+            except (TimeoutError, ValueError, RuntimeError) as error:
+                return NexusAiResponse(
+                    interpretation=Interpretation(
+                        intent=reasoning.interpretation.get("intent", "unclassified"),
+                        entities=reasoning.interpretation.get("entities", {}),
+                        confidence=reasoning.interpretation.get("confidence", "low"),
+                    ),
+                    context_used=snapshot.to_dict(),
+                    plan=[step.to_dict() for step in plan_result.steps],
+                    response="",
+                    status="inference_failed",
+                    errors=[str(error)],
+                    data_requests=data_requests,
+                    evidence=grounding.evidence,
+                    grounding=grounding.to_dict(),
+                )
+            if not local_result["text"].strip():
+                raise ValueError("el modelo local devolvió una respuesta vacía")
+            response_text = local_result["text"]
+            response_status = "completed"
         context_manager.remember_turn(session_id, "assistant", rendered.text, reasoning.interpretation)
         return NexusAiResponse(
             interpretation=Interpretation(
@@ -120,8 +186,8 @@ class NexusAiApplication:
             context_used=snapshot.to_dict(),
             plan=[step.to_dict() for step in plan_result.steps],
             proposed_actions=[],
-            response=rendered.text,
-            status=rendered.status,
+            response=response_text,
+            status=response_status,
             tool_information=[
                 {
                     "name": tool.name,

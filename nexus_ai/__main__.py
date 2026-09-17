@@ -15,7 +15,7 @@ def main() -> int:
         try:
             request = NexusAiRequest.from_dict(json.loads(line))
             response = application.handle(request)
-            print(json.dumps(response.to_dict(), ensure_ascii=False), flush=True)
+            print(            json.dumps(response.to_dict(), ensure_ascii=True), flush=True)
         except Exception as error:
             print(
                 json.dumps(
@@ -25,7 +25,7 @@ def main() -> int:
                             "message": str(error),
                         }
                     },
-                    ensure_ascii=False,
+                    ensure_ascii=True,
                 ),
                 flush=True,
             )

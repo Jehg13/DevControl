@@ -11,7 +11,7 @@ from nexus_training import TrainingConfig, train
 
 class NexusTrainingTest(unittest.TestCase):
     def _dataset(self, directory: str) -> None:
-        for split in ("training", "validation"):
+        for split in ("training", "validation", "test"):
             Path(directory, f"{split}-00000.jsonl").write_text(
                 json.dumps({"input_ids": [1, 2, 3, 2, 3, 4]}) + "\n",
                 encoding="utf-8",
@@ -51,6 +51,8 @@ class NexusTrainingTest(unittest.TestCase):
             self.assertTrue((output / "latest.json").exists())
             self.assertTrue((output / "summary.json").exists())
             self.assertGreater(len((output / "training-log.jsonl").read_text()), 0)
+            self.assertEqual(summary["dataset_tokens"]["total"], 18)
+            self.assertIsNotNone(summary["final_test_loss"])
 
     def test_resume_rejects_a_different_dataset(self):
         with tempfile.TemporaryDirectory() as directory:

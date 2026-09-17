@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-TOKENIZER_VERSION = "1.0.0"
+TOKENIZER_VERSION = "1.1.0"
 BYTE_TOKEN_COUNT = 256
+DEFAULT_CONTEXT_WINDOW = 4096
 
 
 @dataclass(frozen=True)
@@ -55,10 +56,10 @@ def _canonical_json(value: object) -> bytes:
 class NexusTokenizer:
     """A deterministic byte-level BPE tokenizer with exact round-tripping.
 
-    Tokens are represented as hexadecimal byte strings in the serialized
-    vocabulary. This keeps the artifact portable while retaining arbitrary
-    UTF-8, source code, logs, and binary-looking snippets without an unknown
-    character fallback.
+    The tokenizer keeps backward compatibility with older 1.0.0 artifacts while
+    adding explicit context-aware encoding helpers for long prompts, padding and
+    truncation. It remains a byte-level BPE model, not a tokenization scheme that
+    depends on external models or network services.
     """
 
     def __init__(
@@ -66,8 +67,11 @@ class NexusTokenizer:
         merges: Sequence[tuple[bytes, bytes]] = (),
         special_tokens: SpecialTokens | None = None,
         version: str = TOKENIZER_VERSION,
+        *,
+        context_window: int = DEFAULT_CONTEXT_WINDOW,
     ) -> None:
         self.version = version
+        self.context_window = max(1, int(context_window))
         self.special_tokens = special_tokens or SpecialTokens()
         self.merges = list(merges)
         self._merge_ranks = {pair: rank for rank, pair in enumerate(self.merges)}
@@ -186,7 +190,8 @@ class NexusTokenizer:
         max_length: int | None = None,
         truncation: bool = False,
         padding: bool = False,
-    ) -> list[int]:
+        return_attention_mask: bool = False,
+    ) -> list[int] | tuple[list[int], list[int]]:
         ids: list[int] = []
         if add_bos:
             ids.append(self._special_to_id[self.special_tokens.bos])
@@ -197,6 +202,7 @@ class NexusTokenizer:
                 ids.extend(self._id_for_bytes(token) for token in self._encode_bytes(part))
         if add_eos:
             ids.append(self._special_to_id[self.special_tokens.eos])
+
         if max_length is not None:
             if max_length < 1:
                 raise ValueError("max_length must be positive")
@@ -206,7 +212,47 @@ class NexusTokenizer:
                 ids = ids[:max_length]
             elif padding:
                 ids.extend([self._special_to_id[self.special_tokens.pad]] * (max_length - len(ids)))
+
+        if return_attention_mask:
+            mask = [1] * len(ids)
+            if padding and max_length is not None and len(ids) < max_length:
+                mask.extend([0] * (max_length - len(ids)))
+            return ids, mask
         return ids
+
+    def encode_with_attention(
+        self,
+        text: str,
+        *,
+        max_length: int | None = None,
+        padding: bool = True,
+        truncation: bool = True,
+        add_bos: bool = False,
+        add_eos: bool = False,
+    ) -> tuple[list[int], list[int]]:
+        target_length = max_length or self.context_window
+        ids = self.encode(
+            text,
+            add_bos=add_bos,
+            add_eos=add_eos,
+            max_length=target_length,
+            truncation=truncation,
+            padding=padding,
+            return_attention_mask=True,
+        )
+        if isinstance(ids, tuple):
+            return ids
+        return ids, [1] * len(ids)
+
+    def build_position_ids(self, sequence: Sequence[int], *, offset: int = 0) -> list[int]:
+        return list(range(offset, offset + len(sequence)))
+
+    def maybe_truncate(self, sequence: Sequence[int], max_length: int, *, preserve_end: bool = False) -> list[int]:
+        if len(sequence) <= max_length:
+            return list(sequence)
+        if preserve_end:
+            return list(sequence)[-max_length:]
+        return list(sequence)[:max_length]
 
     def _id_for_bytes(self, token: bytes) -> int:
         return self._byte_to_id.get(token, self._token_to_id.get(token, self._special_to_id[self.special_tokens.unk]))
@@ -248,6 +294,7 @@ class NexusTokenizer:
             "format": "nexus-byte-bpe",
             "version": self.version,
             "vocab_size": self.vocab_size,
+            "context_window": self.context_window,
             "special_tokens": self.special_tokens.ordered(),
             "merges": [[_hex_token(left), _hex_token(right)] for left, right in self.merges],
             "training": {"corpus_sha256": list(corpus_hashes)},
@@ -275,7 +322,12 @@ class NexusTokenizer:
             (bytes.fromhex(left[4:-2]), bytes.fromhex(right[4:-2]))
             for left, right in artifact["merges"]
         ]
-        tokenizer = cls(merges=merges, special_tokens=specials, version=artifact["version"])
+        tokenizer = cls(
+            merges=merges,
+            special_tokens=specials,
+            version=artifact["version"],
+            context_window=int(artifact.get("context_window", DEFAULT_CONTEXT_WINDOW)),
+        )
         if tokenizer.vocab_size != artifact["vocab_size"]:
             raise ValueError("tokenizer vocabulary size does not match artifact")
         return tokenizer

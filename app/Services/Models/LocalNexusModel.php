@@ -15,9 +15,9 @@ final class LocalNexusModel implements NexusModel
     public function complete(NexusModelRequest $request): NexusModelResponse
     {
         $config = config('nexus.ai.local');
-        $script = base_path((string) $config['script']);
-        $checkpoint = base_path((string) $config['checkpoint']);
-        $tokenizer = base_path((string) $config['tokenizer']);
+        $script = $this->path((string) $config['script']);
+        $checkpoint = $this->path((string) $config['checkpoint']);
+        $tokenizer = $this->path((string) $config['tokenizer']);
 
         foreach ([$script, $checkpoint, $tokenizer] as $path) {
             if (! is_file($path)) {
@@ -41,13 +41,24 @@ final class LocalNexusModel implements NexusModel
         ], base_path());
         $process->setTimeout((float) $config['timeout'] + 5);
         $process->setInput(json_encode([
-            'prompt' => json_encode($request->toArray(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'prompt' => $request->message,
+            'context' => $request->toArray(),
             'stream' => false,
         ], JSON_THROW_ON_ERROR).PHP_EOL);
         $process->run();
 
         if (! $process->isSuccessful()) {
-            throw new NexusModelException('El runtime local terminó con error.', 'local_runtime_failed');
+            $events = array_values(array_filter(array_map(
+                fn (string $line): ?array => json_decode($line, true),
+                preg_split('/\R/', trim($process->getOutput())) ?: []
+            )));
+            $error = collect($events)->firstWhere('event', 'error');
+            throw new NexusModelException(
+                is_array($error) && isset($error['error'])
+                    ? (string) $error['error']
+                    : 'El runtime local terminó con error.',
+                is_array($error) ? (string) ($error['code'] ?? 'local_runtime_failed') : 'local_runtime_failed'
+            );
         }
 
         $events = array_values(array_filter(array_map(
@@ -59,14 +70,17 @@ final class LocalNexusModel implements NexusModel
             throw new NexusModelException('El runtime local no devolvió un resultado válido.', 'local_invalid_response');
         }
 
-        $text = (string) ($complete['result']['text'] ?? '');
+        $text = trim((string) ($complete['result']['text'] ?? ''));
+        if ($text === '') {
+            throw new NexusModelException('El modelo local devolvió una respuesta vacía.', 'invalid_inference_response');
+        }
         Log::info('Nexus local inference completed.', [
             'offline' => true,
             'metrics' => $complete['result'],
         ]);
         return new NexusModelResponse(
             intent: 'local.inference',
-            message: $text !== '' ? $text : 'El runtime local no generó texto.',
+            message: $text,
             toolCalls: [],
             requiresConfirmation: false,
             metadata: ['offline' => true, 'metrics' => $complete['result']],
@@ -76,5 +90,20 @@ final class LocalNexusModel implements NexusModel
     public function capabilities(): NexusModelCapabilities
     {
         return new NexusModelCapabilities(textGeneration: true, structuredOutput: false, toolCalling: false);
+    }
+
+    private function path(string $value): string
+    {
+        if (preg_match('/^(?:[A-Za-z]:[\\\\\/]|[\\\\\/])/', $value) === 1) {
+            return $value;
+        }
+
+        $basePath = base_path($value);
+        $workingPath = getcwd().DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $value);
+        if (is_file($basePath) || ! is_file($workingPath)) {
+            return $basePath;
+        }
+
+        return $workingPath;
     }
 }

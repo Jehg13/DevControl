@@ -23,12 +23,18 @@ class NexusAiPythonTransport implements NexusAiTransport
 
         $python = (string) config('nexus.ai.python.executable', 'python');
         $workingDirectory = (string) config('nexus.ai.python.working_directory', base_path());
+        if (! is_dir($workingDirectory.DIRECTORY_SEPARATOR.'nexus_ai')) {
+            $workingDirectory = getcwd();
+        }
         $command = escapeshellarg($python).' -m nexus_ai';
         $inheritedEnvironment = getenv();
         $environment = array_merge(
             is_array($inheritedEnvironment) ? $inheritedEnvironment : [],
             $_ENV,
             [
+            'NEXUS_AI_ENABLED' => (string) (config('nexus.ai.enabled') ? 'true' : 'false'),
+            'NEXUS_AI_MODEL_PATH' => (string) config('nexus.ai.local.checkpoint', ''),
+            'NEXUS_AI_TOKENIZER_PATH' => (string) config('nexus.ai.local.tokenizer', ''),
             'NEXUS_MEMORY_PATH' => (string) config('nexus.ai.python.memory_path', storage_path('app/nexus-ai/memory.json')),
             'NEXUS_MEMORY_TTL' => (string) config('nexus.ai.python.memory_ttl', 1800),
             'NEXUS_MEMORY_MAX_RECORDS' => (string) config('nexus.ai.python.memory_max_records', 50),

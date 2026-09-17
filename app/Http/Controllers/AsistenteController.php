@@ -245,6 +245,14 @@ class AsistenteController extends Controller
         $this->updateResearchProgress($request, $progressToken, 'completed', null, [
             'intent', 'evidence', 'analysis', 'synthesis', 'verification',
         ], [], 'Investigación completada.');
+        if (! is_array($response['message'] ?? null)
+            || trim((string) ($response['message']['content'] ?? '')) === '') {
+            $response['message'] = [
+                'role' => 'assistant',
+                'content' => 'Nexus terminó la investigación, pero no recibió una respuesta textual del motor. Revisa el estado de Nexus AI.',
+            ];
+            $response['nexus']['status'] = 'empty_response';
+        }
         $messages[] = $response['message'];
         $memory->recordMessage($conversation, 'assistant', $response['message']['content'], ['source' => 'legacy_chat']);
         $memory->promoteInteraction(
@@ -1874,6 +1882,7 @@ class AsistenteController extends Controller
     private function isCasualConversation(string $text): bool
     {
         return $this->isGreetingInstruction($text)
+            || $this->isOpenQuestion($text)
             || $this->hasApproximatePhrase($text, [
                 'gracias', 'muchas gracias', 'perfecto', 'excelente', 'genial',
                 'ok', 'okay', 'va', 'sale', 'entendido', 'de acuerdo',
@@ -1881,6 +1890,11 @@ class AsistenteController extends Controller
                 'que es devcontrol', 'que es dev control', 'para que sirve devcontrol',
                 'para que sirve dev control', 'que hace devcontrol',
             ]);
+    }
+
+    private function isOpenQuestion(string $text): bool
+    {
+        return preg_match('/^\s*(?:que|qué|quien|quién|cual|cuál|como|cómo|por que|por qué|para que|para qué|donde|dónde|cuando|cuándo)\b/u', $text) === 1;
     }
 
     private function conversationResponse(string $text, array $history): string
@@ -1906,6 +1920,20 @@ class AsistenteController extends Controller
                 'Soy Nexus, el asistente inteligente de DevControl. Estoy aquí para entender lo que necesitas, consultar la información disponible y ayudarte a organizar tu proyecto.',
                 'Me llamo Nexus. Soy el asistente de DevControl y puedo conversar contigo, revisar el estado del proyecto y guiarte por sus módulos.',
                 'Soy Nexus, una IA integrada en DevControl. Mi trabajo es ayudarte a entender el sistema y actuar de forma segura sobre la información disponible.',
+            ], $history);
+        }
+
+        if ($this->hasApproximatePhrase($text, ['cual es tu funcion', 'cuál es tu función', 'para que estas', 'para qué estás'])) {
+            return $this->naturalResponse([
+                'Soy Nexus, la capa de asistencia de DevControl. Puedo conversar sobre el sistema, consultar evidencia local, explicar su estructura y ayudarte a investigar problemas sin inventar resultados.',
+                'Mi función es ayudarte a comprender DevControl: primero interpreto tu pregunta, después busco el contexto disponible y te respondo con la evidencia que realmente pueda consultar.',
+            ], $history);
+        }
+
+        if ($this->hasApproximatePhrase($text, ['que es sh fragances', 'qué es sh fragances'])) {
+            return $this->naturalResponse([
+                'No tengo evidencia suficiente para afirmar qué es “Sh Fragances”. Parece ser el nombre de un proyecto o entidad, pero no voy a inventar su descripción. Si lo relacionas con un proyecto registrado o un repositorio, puedo investigarlo y explicarte qué contiene.',
+                '“Sh Fragances” no aparece todavía en el contexto disponible de DevControl. Necesito que selecciones el proyecto o me indiques su repositorio para responder basándome en evidencia.',
             ], $history);
         }
 

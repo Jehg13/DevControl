@@ -17,15 +17,77 @@ class NexusRuntime
     ) {
     }
 
+    private function containsSqlStatement(string $message): bool
+    {
+        return preg_match('/\b(select|insert\s+into|update\s+\w+\s+set|delete\s+from|create\s+table|alter\s+table)\b/i', $message) === 1;
+    }
+
+    private function databaseQueryNarrative(string $message): string
+    {
+        $query = trim($message);
+        $query = preg_replace('/^.*?\b(select|insert\s+into|update\s+\w+\s+set|delete\s+from|create\s+table|alter\s+table)\b/is', '$1', $query) ?? $query;
+        $query = trim($query);
+        $findings = [];
+
+        if (preg_match('/\bselect\s+\*/i', $query) === 1) {
+            $findings[] = [
+                'issue' => 'select_star',
+                'category' => 'performance',
+                'severity' => 'medium',
+                'evidence' => 'SELECT *',
+                'correction' => 'Seleccionar únicamente las columnas requeridas.',
+            ];
+        }
+        if (preg_match('/\bjoin\b/i', $query) === 1 && preg_match('/\bon\b/i', $query) !== 1) {
+            $findings[] = [
+                'issue' => 'join_without_on',
+                'category' => 'integrity/performance',
+                'severity' => 'high',
+                'evidence' => 'JOIN sin condición ON',
+                'correction' => 'Agregar la clave de relación explícita, por ejemplo orders.user_id = users.id.',
+            ];
+        }
+        if (preg_match('/\bselect\b/i', $query) === 1
+            && preg_match('/\blimit\b/i', $query) !== 1) {
+            $findings[] = [
+                'issue' => 'unbounded_read',
+                'category' => 'performance',
+                'severity' => 'medium',
+                'evidence' => 'SELECT sin LIMIT visible',
+                'correction' => 'Agregar un límite o paginación cuando el contrato no sea deliberadamente ilimitado.',
+            ];
+        }
+        if (preg_match('/\b(lower|upper|date|cast)\s*\(/i', $query) === 1) {
+            $findings[] = [
+                'issue' => 'function_on_predicate_column',
+                'category' => 'performance',
+                'severity' => 'medium',
+                'evidence' => 'Función aplicada dentro del predicado',
+                'correction' => 'Usar un predicado sargable, normalizar el valor o evaluar un índice funcional compatible.',
+            ];
+        }
+
+        $lines = ['Se analizó la query recibida como evidencia directa:', $query, ''];
+        if ($findings === []) {
+            $lines[] = 'No se detectaron problemas estáticos con las reglas disponibles.';
+        } else {
+            $lines[] = 'Problemas detectados:';
+            foreach ($findings as $index => $finding) {
+                $lines[] = ($index + 1).'. '.$finding['issue'].' ['.$finding['severity'].']';
+                $lines[] = '   Categoría: '.$finding['category'].'. Evidencia: '.$finding['evidence'].'.';
+                $lines[] = '   Corrección: '.$finding['correction'];
+            }
+        }
+        $lines[] = 'No se puede confirmar el índice óptimo, la cardinalidad ni el plan de ejecución sin EXPLAIN y estadísticas reales.';
+
+        return implode("\n", $lines);
+    }
+
     public function handle(NexusRuntimeRequest $request): NexusRuntimeResponse
     {
         $action = ($this->actionClassifier ?? new NexusActionClassifier())->classify($request);
         if ($action !== null) {
             return $this->handleAction($request, $action);
-        }
-
-        if ($this->pythonBridge !== null && (bool) config('nexus.ai.python.enabled', false)) {
-            return $this->pythonBridge->handle($request);
         }
 
         $intent = $this->classifyIntent($request->message);
@@ -56,6 +118,10 @@ class NexusRuntime
                 status: 'completed',
                 source: 'runtime_general',
             );
+        }
+
+        if ($this->pythonBridge !== null && (bool) config('nexus.ai.python.enabled', false)) {
+            return $this->pythonBridge->handle($request);
         }
 
         if ((bool) config('nexus.ai.enabled') && config('nexus.ai.driver', 'none') !== 'none' && $this->execution !== null) {
@@ -494,6 +560,10 @@ class NexusRuntime
         } elseif ($this->hasAny($text, ['como funciona el commit', 'como funciona actualmente el commit', 'como prepara nexus el commit'])) {
             $intent = 'commit_query';
             $confidence = 0.95;
+        } elseif ($this->containsSqlStatement($message)
+            && $this->hasAny($text, ['analiza', 'query', 'consulta', 'sql', 'integridad', 'rendimiento', 'performance'])) {
+            $intent = 'database_analysis';
+            $confidence = 0.98;
         } elseif ($this->hasAny($text, [
             'no aparecen',
             'no se muestran',
@@ -959,6 +1029,13 @@ class NexusRuntime
 
         if ($intent === 'commit_query') {
             return 'Actualmente Nexus clasifica un commit como una acción protegida: prepara nexus.github.local.commit, exige permisos de escritura y confirmación explícita antes de crear el commit. Esta consulta no creó ningún commit.';
+        }
+
+        if ($intent === 'database_analysis') {
+            return $this->appendSelfEvaluation(
+                $this->databaseQueryNarrative($message),
+                $selfEvaluation
+            );
         }
 
         if ($intent === 'behavior_analysis') {

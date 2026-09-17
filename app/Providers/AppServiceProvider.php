@@ -40,6 +40,8 @@ use App\Nexus\Tools\BugUpdateTool;
 use App\Nexus\Tools\CodeModifyTool;
 use App\Nexus\Tools\GitHubIntelligenceTool;
 use App\Nexus\Tools\ObservabilityIntelligenceTool;
+use App\Nexus\Tools\ProductionReadinessTool;
+use App\Nexus\Tools\PhpIntelligenceTool;
 use App\Nexus\Tools\ProjectListTool;
 use App\Nexus\Tools\TaskCreateTool;
 use App\Nexus\Tools\TaskDeleteTool;
@@ -115,6 +117,8 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(CodeModifyTool::class),
                 $app->make(GitHubIntelligenceTool::class),
                 $app->make(ObservabilityIntelligenceTool::class),
+                $app->make(ProductionReadinessTool::class),
+                $app->make(PhpIntelligenceTool::class),
             ]);
         });
 

@@ -1,0 +1,4 @@
+{"id":"fund-001","code":"values = [1, 2, 3]\nfor value in values:\n    print(value)","expected_concepts":["data_structures","algorithms"]}
+{"id":"fund-002","code":"items = {}\nfor key in keys:\n    items[key] = 1","expected_concepts":["data_structures","algorithms"]}
+{"id":"fund-003","code":"with open('data.txt') as handle:\n    content = handle.read()","expected_concepts":["input_output"]}
+{"id":"fund-004","code":"from threading import Thread\nworker = Thread(target=run)","expected_concepts":["concurrency"]}

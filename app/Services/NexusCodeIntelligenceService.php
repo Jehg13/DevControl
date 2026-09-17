@@ -80,10 +80,14 @@ final class NexusCodeIntelligenceService
         ];
     }
 
-    public function analyze(?int $projectId = null, ?string $relativePath = null, bool $refresh = false): array
+    public function analyze(?int $projectId = null, ?string $relativePath = null, bool $refresh = false, int $maxFiles = 250): array
     {
+        $projectId = $projectId !== null && \App\Models\Proyecto::query()->whereKey($projectId)->exists()
+            ? $projectId
+            : null;
+
         $root = $this->resolveRoot($relativePath);
-        $files = $this->files($root);
+        $files = $this->files($root, $maxFiles);
         $changed = [];
         $unchanged = [];
         $nodes = [];
@@ -207,8 +211,13 @@ final class NexusCodeIntelligenceService
         return $root;
     }
 
-    private function files(string $root): array
+    private function files(string $root, int $maxFiles): array
     {
-        return collect(File::allFiles($root))->reject(fn (\SplFileInfo $file): bool => preg_match('/(^|[\\\\\/])(vendor|node_modules|storage|bootstrap\/cache|\.git)([\\\\\/]|$)/', str_replace('\\', '/', $file->getPathname())) === 1)->filter(fn (\SplFileInfo $file): bool => $file->getSize() <= 500000)->values()->all();
+        return collect(File::allFiles($root))
+            ->reject(fn (\SplFileInfo $file): bool => preg_match('/(^|[\\\\\/])(vendor|node_modules|storage|bootstrap\/cache|\.git)([\\\\\/]|$)/', str_replace('\\', '/', $file->getPathname())) === 1)
+            ->filter(fn (\SplFileInfo $file): bool => $file->getSize() <= 500000)
+            ->take(max(1, $maxFiles))
+            ->values()
+            ->all();
     }
 }

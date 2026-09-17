@@ -2,6 +2,7 @@
 
 from .graph import KnowledgeGraph, KnowledgeValidationError
 from .models import KnowledgeAssertion, KnowledgeNode, KnowledgeSnapshot
+from nexus_ai.fundamentals import CodeObservation, FundamentalConcept, FundamentalsKnowledgeBase
 
 __all__ = [
     "KnowledgeAssertion",
@@ -9,4 +10,7 @@ __all__ = [
     "KnowledgeNode",
     "KnowledgeSnapshot",
     "KnowledgeValidationError",
+    "CodeObservation",
+    "FundamentalConcept",
+    "FundamentalsKnowledgeBase",
 ]

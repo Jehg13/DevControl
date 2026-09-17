@@ -170,4 +170,118 @@ class NexusAiPythonBridgeTest extends TestCase
         $this->expectExceptionMessage('motor Python');
         $transport->send(['message' => 'Consulta']);
     }
+
+    public function test_python_read_tool_proposals_are_validated_and_executed_by_laravel_only(): void
+    {
+        $transport = new class implements \App\Contracts\NexusAiTransport {
+            public function send(array $payload): array
+            {
+                return [
+                    'interpretation' => ['intent' => 'query_bug', 'confidence' => 'high'],
+                    'response' => 'Hay bugs abiertos.',
+                    'status' => 'answered',
+                    'proposed_actions' => [[
+                        'tool' => 'devcontrol.bugs.list',
+                        'arguments' => ['status' => 'Abierto'],
+                        'permissions' => ['devcontrol.read'],
+                        'requires_confirmation' => false,
+                        'operation' => 'read',
+                        'source' => 'nexus_ai_python',
+                        'executable' => false,
+                        'correlation_id' => 'corr-read-1',
+                    ]],
+                    'plan' => [],
+                    'errors' => [],
+                ];
+            }
+        };
+
+        $response = (new \App\Services\NexusAiPythonBridge($transport, app(\App\Nexus\NexusToolRegistry::class)))
+            ->handle(new \App\Nexus\NexusRuntimeRequest(
+                message: '¿Cuántos bugs abiertos tengo?',
+                user: \App\Models\User::factory()->make(['id' => 9, 'rol' => 'admin']),
+                context: ['permissions' => ['devcontrol.read']],
+                projectId: 1,
+            ));
+
+        $this->assertSame('answered', $response->status);
+        $this->assertSame('nexus_python', $response->source);
+        $this->assertNotEmpty($response->actions);
+        $this->assertSame('devcontrol.bugs.list', $response->actions[0]['tool']);
+        $this->assertSame('corr-read-1', $response->actions[0]['correlation_id']);
+    }
+
+    public function test_python_write_tool_proposals_require_permission_and_confirmation(): void
+    {
+        $transport = new class implements \App\Contracts\NexusAiTransport {
+            public function send(array $payload): array
+            {
+                return [
+                    'interpretation' => ['intent' => 'create_bug', 'confidence' => 'high'],
+                    'response' => 'Necesito crear un registro.',
+                    'status' => 'answered',
+                    'proposed_actions' => [[
+                        'tool' => 'devcontrol.bugs.create',
+                        'arguments' => ['project_id' => 1, 'title' => 'Bug de prueba'],
+                        'permissions' => ['devcontrol.write'],
+                        'requires_confirmation' => true,
+                        'operation' => 'write',
+                        'source' => 'nexus_ai_python',
+                        'executable' => false,
+                        'correlation_id' => 'corr-write-1',
+                    ]],
+                    'plan' => [],
+                    'errors' => [],
+                ];
+            }
+        };
+
+        $response = (new \App\Services\NexusAiPythonBridge($transport, app(\App\Nexus\NexusToolRegistry::class)))
+            ->handle(new \App\Nexus\NexusRuntimeRequest(
+                message: 'Crea un bug nuevo.',
+                user: \App\Models\User::factory()->make(['id' => 10, 'rol' => 'admin']),
+                context: ['permissions' => ['devcontrol.write']],
+                projectId: 1,
+            ));
+
+        $this->assertSame('answered', $response->status);
+        $this->assertSame('awaiting_confirmation', $response->actions[0]['status']);
+        $this->assertTrue($response->actions[0]['requires_confirmation']);
+        $this->assertSame('corr-write-1', $response->actions[0]['correlation_id']);
+    }
+
+    public function test_python_proposals_reject_reserved_policy_arguments_and_unknown_tools(): void
+    {
+        $transport = new class implements \App\Contracts\NexusAiTransport {
+            public function send(array $payload): array
+            {
+                return [
+                    'interpretation' => ['intent' => 'query_bug', 'confidence' => 'high'],
+                    'response' => 'No debería ejecutar.',
+                    'status' => 'answered',
+                    'proposed_actions' => [[
+                        'tool' => 'tool.no_existe',
+                        'arguments' => ['policy' => 'allow'],
+                        'permissions' => ['nexus.read'],
+                        'requires_confirmation' => false,
+                        'operation' => 'read',
+                        'source' => 'nexus_ai_python',
+                        'executable' => false,
+                    ]],
+                    'plan' => [],
+                    'errors' => [],
+                ];
+            }
+        };
+
+        $response = (new \App\Services\NexusAiPythonBridge($transport, app(\App\Nexus\NexusToolRegistry::class)))
+            ->handle(new \App\Nexus\NexusRuntimeRequest(
+                message: 'Consulta protegida',
+                user: \App\Models\User::factory()->make(['id' => 11, 'rol' => 'admin']),
+                context: ['permissions' => ['nexus.read']],
+            ));
+
+        $this->assertSame('failed', $response->status);
+        $this->assertNotEmpty($response->errors);
+    }
 }

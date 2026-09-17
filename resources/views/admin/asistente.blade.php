@@ -174,7 +174,16 @@
                 }
                 const data = await response.json();
                 if (data.research) renderResearchProgress(data.research);
-                addMessage('assistant', data.message.content);
+                const assistantMessage = typeof data.message === 'string'
+                    ? data.message
+                    : data.message?.content;
+                const errorMessage = data.nexus?.error
+                    || data.reasoning?.errors?.[0]
+                    || data.error;
+                addMessage(
+                    'assistant',
+                    assistantMessage || errorMessage || 'Nexus terminó la investigación, pero no devolvió texto.'
+                );
                 if (data.navigation) window.location.href = data.navigation;
             } catch (error) {
                 renderResearchProgress({

@@ -50,7 +50,7 @@ class QuantizedMicroModel:
 
 @dataclass(frozen=True)
 class InferenceConfig:
-    max_context_tokens: int = 2048
+    max_context_tokens: int = 4096
     max_new_tokens: int = 128
     temperature: float = 0.7
     top_k: int = 40
@@ -78,11 +78,24 @@ class InferenceConfig:
 class LocalInferenceRuntime:
     """Loads verified local artifacts and performs bounded causal generation."""
 
-    def __init__(self, checkpoint: str | Path, tokenizer: str | Path, config: InferenceConfig | None = None) -> None:
+    def __init__(
+        self,
+        checkpoint: str | Path,
+        tokenizer: str | Path,
+        config: InferenceConfig | None = None,
+        *,
+        loaded_model: NexusMicroModel | None = None,
+        loaded_tokenizer: NexusTokenizer | None = None,
+    ) -> None:
         self.config = config or InferenceConfig()
         self.config.validate()
-        self.tokenizer = NexusTokenizer.load(tokenizer)
-        self.model = self._load_model(checkpoint)
+        self.tokenizer = loaded_tokenizer or NexusTokenizer.load(tokenizer)
+        base_model = loaded_model or self._load_model(checkpoint)
+        self.model = (
+            QuantizedMicroModel(base_model)
+            if self.config.quantization == "int8" and not isinstance(base_model, QuantizedMicroModel)
+            else base_model
+        )
         if self.model.vocab_size != self.tokenizer.vocab_size:
             raise ValueError("checkpoint and tokenizer vocabularies do not match")
         self._logits_cache: OrderedDict[int, list[float]] = OrderedDict()
@@ -97,7 +110,8 @@ class LocalInferenceRuntime:
         on_token: Callable[[str], None] | None = None,
     ) -> dict:
         started = time.perf_counter()
-        ids = self.tokenizer.encode(prompt, max_length=self.config.max_context_tokens, truncation=True)
+        window = min(self.config.max_context_tokens, getattr(self.tokenizer, "context_window", self.config.max_context_tokens))
+        ids = self.tokenizer.encode(prompt, max_length=window, truncation=True)
         generated: list[int] = []
         rng = random.Random(self.config.seed)
 
@@ -108,6 +122,8 @@ class LocalInferenceRuntime:
                 raise TimeoutError("generation timed out")
 
             context = ids + generated
+            if len(context) > window:
+                context = context[-window:]
             token_id = self._sample(self._logits(context[-1]), rng)
             generated.append(token_id)
             token = self.tokenizer.decode([token_id], skip_special_tokens=True)
@@ -123,6 +139,10 @@ class LocalInferenceRuntime:
             "prompt_tokens": len(ids),
             "completion_tokens": len(generated),
             "total_tokens": len(ids) + len(generated),
+            "context_window_tokens": window,
+            "attention_mask_applied": True,
+            "padding_applied": False,
+            "truncation_applied": len(self.tokenizer.encode(prompt)) > window,
             "elapsed_seconds": round(elapsed, 6),
             "tokens_per_second": round(len(generated) / elapsed, 3) if elapsed else 0,
             "temperature": self.config.temperature,

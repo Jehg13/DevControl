@@ -140,6 +140,10 @@ def _evaluate(model: NexusMicroModel, examples: list[list[int]]) -> float | None
     return sum(losses) / len(losses) if losses else None
 
 
+def _token_count(examples: list[list[int]]) -> int:
+    return sum(len(sequence) for sequence in examples)
+
+
 def _write_checkpoint(
     directory: Path,
     model: NexusMicroModel,
@@ -193,6 +197,7 @@ def train(
         raise ValueError("training requires an explicitly approved dataset (approval.json)")
     train_examples = _read_examples(dataset_path, "training")
     validation_examples = _read_examples(dataset_path, "validation")
+    test_examples = _read_examples(dataset_path, "test")
     if not train_examples:
         raise ValueError("dataset has no training examples")
     if config.max_samples is not None:
@@ -262,7 +267,14 @@ def train(
         "steps": step,
         "epochs": config.epochs,
         "tokens_processed": sum(len(example) for example in train_examples) * config.epochs,
+        "dataset_tokens": {
+            "training": _token_count(train_examples),
+            "validation": _token_count(validation_examples),
+            "test": _token_count(test_examples),
+            "total": _token_count(train_examples + validation_examples + test_examples),
+        },
         "final_validation_loss": _evaluate(model, validation_examples),
+        "final_test_loss": _evaluate(model, test_examples),
         "checkpoint": str(output / "latest.json"),
         "training_seconds": time.perf_counter() - started,
     }

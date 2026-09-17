@@ -13,6 +13,20 @@ use Tests\TestCase;
 
 class NexusRuntimeTest extends TestCase
 {
+    public function test_sql_query_is_analyzed_as_database_evidence(): void
+    {
+        $response = app(NexusRuntime::class)->handle(new NexusRuntimeRequest(
+            message: "Analiza esta query y dime los problemas de integridad y rendimiento: SELECT * FROM orders JOIN users WHERE LOWER(users.email) = 'a@example.test';",
+        ));
+
+        $this->assertSame('database_analysis', $response->intent);
+        $this->assertStringContainsString('select_star', $response->finalMessage);
+        $this->assertStringContainsString('join_without_on', $response->finalMessage);
+        $this->assertStringContainsString('function_on_predicate_column', $response->finalMessage);
+        $this->assertStringContainsString('EXPLAIN', $response->finalMessage);
+        $this->assertStringNotContainsString('punto de entrada y rutas', $response->finalMessage);
+    }
+
     public function test_general_question_responds_without_tools(): void
     {
         $runtime = app(NexusRuntime::class);
