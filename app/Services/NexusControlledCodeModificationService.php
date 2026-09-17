@@ -7,7 +7,6 @@ use App\Models\NexusToolCall;
 use App\Models\User;
 use App\Nexus\NexusToolContext;
 use App\Nexus\NexusToolRegistry;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -18,10 +17,14 @@ final class NexusControlledCodeModificationService
     public function __construct(
         private readonly NexusToolRegistry $tools,
         ?NexusCognitiveSecurityBoundary $boundary = null,
+        ?NexusEngineeringRecoveryService $recovery = null,
     )
     {
         $this->boundary = $boundary ?? new NexusCognitiveSecurityBoundary($tools);
+        $this->recovery = $recovery ?? new NexusEngineeringRecoveryService();
     }
+
+    private readonly NexusEngineeringRecoveryService $recovery;
 
     /** @param array<string, mixed> $plan */
     public function execute(
@@ -47,14 +50,26 @@ final class NexusControlledCodeModificationService
             'steps' => 0,
             'context' => ['session_id' => $sessionId, 'plan_id' => $plan['plan_id'], 'confirmed' => true],
         ]);
-        $snapshot = null;
+        $checkpoint = null;
 
         try {
+            $fileSnapshot = $this->recovery->snapshotFile((string) $parameters['path']);
+            $checkpoint = $this->recovery->checkpoint(
+                $run,
+                'modify:'.$parameters['path'],
+                'file_modification',
+                ['path' => $parameters['path'], 'plan_id' => $plan['plan_id']],
+                $fileSnapshot,
+            );
             $modify = $this->call($run, 'nexus.code.modify', $parameters, $user, $sessionId, 'apply');
             if (! $modify['result']->successful) {
+                $this->recovery->markCompleted($checkpoint);
                 return $this->fail($run, $modify['result']->errorCode ?? 'modification_failed', $modify['result']->error ?? 'La modificación falló.');
             }
-            $snapshot = $modify['result']->data['rollback'] ?? null;
+            $checkpoint = $this->recovery->registerModifiedSnapshot(
+                $checkpoint,
+                $modify['result']->data['rollback'] ?? []
+            );
             $path = (string) ($modify['result']->data['path'] ?? $parameters['path']);
 
             $validation = $this->call(
@@ -66,14 +81,14 @@ final class NexusControlledCodeModificationService
                 'test',
             );
             if (! $validation['result']->successful) {
-                $this->rollback($snapshot);
+                $rollback = $this->recovery->rollback($checkpoint);
                 return $this->fail(
                     $run,
                     'validation_failed_rolled_back',
                     'Las pruebas fallaron; el archivo fue restaurado.',
                     [
                         'validation' => $validation['result']->toArray(),
-                        'rollback' => ['performed' => true, 'path' => $path],
+                        'rollback' => $rollback,
                     ],
                 );
             }
@@ -87,13 +102,18 @@ final class NexusControlledCodeModificationService
                 'rollback' => ['available' => true, 'path' => $path],
             ];
             $run->update(['status' => 'completed', 'result' => $result]);
+            $this->recovery->markCompleted($checkpoint);
             return $result;
         } catch (Throwable $exception) {
             Log::error('Controlled code modification failed.', ['run_id' => $run->id, 'exception' => $exception]);
-            if (is_array($snapshot)) {
-                $this->rollback($snapshot);
+            if ($checkpoint instanceof \App\Models\NexusRecoveryCheckpoint) {
+                $rollback = $this->recovery->rollback($checkpoint);
+            } else {
+                $rollback = ['status' => 'not_available'];
             }
-            return $this->fail($run, 'modification_failed', $exception->getMessage());
+            return $this->fail($run, 'modification_failed', $exception->getMessage(), [
+                'rollback' => $rollback,
+            ]);
         }
     }
 
@@ -116,20 +136,6 @@ final class NexusControlledCodeModificationService
             'finished_at' => now(),
         ]);
         return ['result' => $result];
-    }
-
-    private function rollback(?array $snapshot): void
-    {
-        if (! is_array($snapshot) || ! isset($snapshot['path'], $snapshot['original_content'])) {
-            return;
-        }
-        $path = realpath(base_path((string) $snapshot['path']));
-        if ($path !== false
-            && is_file($path)
-            && isset($snapshot['modified_sha256'])
-            && hash_file('sha256', $path) === $snapshot['modified_sha256']) {
-            File::put($path, (string) $snapshot['original_content']);
-        }
     }
 
     private function validatePlan(array $plan, ?User $user, bool $confirmed, array $parameters): array

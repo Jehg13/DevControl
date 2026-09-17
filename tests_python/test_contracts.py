@@ -29,7 +29,7 @@ class NexusAiFoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             NexusAiRequest(message=" ")
 
-    def test_application_does_not_execute_tools_or_claim_intelligence(self):
+    def test_application_handles_request_without_executing_tools(self):
         request = NexusAiRequest(
             message="Haz push de los cambios.",
             tools=[ToolDescriptor("git_push", "Push changes", permissions=["github.write"])],
@@ -37,16 +37,15 @@ class NexusAiFoundationTests(unittest.TestCase):
 
         response = NexusAiApplication().handle(request)
 
-        self.assertEqual(response.status, "not_implemented")
-        self.assertEqual(response.interpretation.intent, "unclassified")
+        self.assertIn(response.status, {"answered", "missing_information", "unresolved"})
+        self.assertTrue(response.interpretation.intent)
         self.assertEqual(response.proposed_actions, [])
         self.assertEqual(response.tool_information[0]["name"], "git_push")
-        self.assertIn("aún no está implementada", response.response)
 
     def test_response_is_serializable(self):
         response = NexusAiApplication().handle(NexusAiRequest(message="Consulta"))
 
-        self.assertEqual(response.to_dict()["status"], "not_implemented")
+        self.assertIn(response.to_dict()["status"], {"answered", "missing_information"})
         self.assertIn("interpretation", response.to_dict())
 
     def test_application_creates_non_executable_laravel_tool_proposal(self):

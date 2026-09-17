@@ -13,13 +13,16 @@ use Throwable;
 final class NexusControlledExecutionService
 {
     private readonly NexusCognitiveSecurityBoundary $boundary;
+    private readonly NexusEngineeringRecoveryService $recovery;
 
     public function __construct(
         private readonly NexusToolRegistry $tools,
         ?NexusCognitiveSecurityBoundary $boundary = null,
+        ?NexusEngineeringRecoveryService $recovery = null,
         private readonly int $defaultTimeoutSeconds = 30,
     ) {
         $this->boundary = $boundary ?? new NexusCognitiveSecurityBoundary($tools);
+        $this->recovery = $recovery ?? new NexusEngineeringRecoveryService();
     }
 
     /**
@@ -102,6 +105,16 @@ final class NexusControlledExecutionService
                     }
 
                     $parameters = $stepParameters[$stepId][$toolName] ?? [];
+                    $checkpoint = $this->recovery->checkpoint(
+                        $run,
+                        'step:'.$stepId.':tool:'.$toolName.':'.($run->toolCalls()->count() + 1),
+                        'controlled_tool',
+                        [
+                            'plan_id' => $plan['plan_id'],
+                            'step_id' => $stepId,
+                            'tool' => $toolName,
+                        ],
+                    );
                     $callStarted = now();
                     $toolCall = NexusToolCall::create([
                         'nexus_run_id' => $run->id,
@@ -128,6 +141,12 @@ final class NexusControlledExecutionService
                         )
                     );
                     $resultData = $result->toArray();
+                    if (isset($result->data['rollback']) && is_array($result->data['rollback'])) {
+                        $checkpoint = $this->recovery->registerModifiedSnapshot(
+                            $checkpoint,
+                            $result->data['rollback']
+                        );
+                    }
                     $timedOut = $this->timedOut($started, $timeout);
                     $callStatus = $timedOut ? 'failed' : ($result->successful ? 'succeeded' : 'failed');
                     $error = $timedOut
@@ -178,15 +197,22 @@ final class NexusControlledExecutionService
                         ];
                         break 2;
                     }
+                    $this->recovery->markCompleted($checkpoint);
                 }
                 $completedSteps[] = $stepId;
             }
 
             if ($failed !== null) {
+                $failed['recovery'] = $this->recovery->rollbackRun($run);
                 $run->update([
                     'status' => 'failed',
                     'error' => "{$failed['code']}: {$failed['message']}",
-                    'result' => ['plan_id' => $plan['plan_id'], 'executed' => $executed, 'failure' => $failed],
+                    'result' => [
+                        'plan_id' => $plan['plan_id'],
+                        'executed' => $executed,
+                        'failure' => $failed,
+                        'recovery' => $failed['recovery'] ?? [],
+                    ],
                 ]);
                 return [
                     'status' => 'failed',
@@ -212,16 +238,25 @@ final class NexusControlledExecutionService
                 'session_id' => $sessionId,
                 'exception' => $exception,
             ]);
+            $recovery = $this->recovery->rollbackRun($run);
             $run->update([
                 'status' => 'failed',
                 'error' => 'execution_failed: '.$exception->getMessage(),
-                'result' => ['plan_id' => $plan['plan_id'], 'executed' => $executed],
+                'result' => [
+                    'plan_id' => $plan['plan_id'],
+                    'executed' => $executed,
+                    'recovery' => $recovery,
+                ],
             ]);
             return [
                 'status' => 'failed',
                 'run_id' => $run->id,
                 'executed' => $executed,
-                'failure' => ['code' => 'execution_failed', 'message' => $exception->getMessage()],
+                'failure' => [
+                    'code' => 'execution_failed',
+                    'message' => $exception->getMessage(),
+                    'recovery' => $recovery,
+                ],
             ];
         }
     }

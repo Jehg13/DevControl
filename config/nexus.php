@@ -10,6 +10,15 @@ return [
         'temperature' => (float) env('NEXUS_AI_TEMPERATURE', 0.1),
         'timeout' => (int) env('NEXUS_AI_TIMEOUT', 30),
         'max_steps' => (int) env('NEXUS_AI_MAX_STEPS', 5),
+        'python' => [
+            'enabled' => (bool) env('NEXUS_PYTHON_ENABLED', false),
+            'executable' => env('NEXUS_PYTHON_EXECUTABLE', 'python'),
+            'working_directory' => env('NEXUS_PYTHON_WORKING_DIRECTORY', base_path()),
+            'timeout' => (int) env('NEXUS_PYTHON_TIMEOUT', 30),
+            'memory_path' => env('NEXUS_PYTHON_MEMORY_PATH', storage_path('app/nexus-ai/memory.json')),
+            'memory_ttl' => (int) env('NEXUS_PYTHON_MEMORY_TTL', 1800),
+            'memory_max_records' => (int) env('NEXUS_PYTHON_MEMORY_MAX_RECORDS', 50),
+        ],
     ],
     'memory' => [
         'recent_messages' => (int) env('NEXUS_MEMORY_RECENT_MESSAGES', 8),

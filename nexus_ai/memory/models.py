@@ -33,6 +33,9 @@ class ContextReference:
     selected: dict[str, Any] | None = None
     requires_clarification: bool = False
     reason: str | None = None
+    reference_kind: str = "entity"
+    target_entity: str | None = None
+    resolution_strategy: str = "context"
 
 
 @dataclass(frozen=True)

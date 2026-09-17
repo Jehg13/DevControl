@@ -1,0 +1,378 @@
+[
+  {
+    "record_id": "default:25",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Actualiza el bug.",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:47.913286+00:00",
+    "expires_at": "2026-09-17T06:17:47.913286+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:2",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: action_failed.\nAcción fallida:\n- Sin permiso.\nNo indicaré que la acción se completó sin un resultado exitoso de Laravel.",
+      "interpretation": {
+        "intent": "update_bug",
+        "entity": "bug",
+        "action": "update",
+        "operation": "update",
+        "filters": {},
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:47.924132+00:00",
+    "expires_at": "2026-09-17T06:17:47.924132+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:3",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Muestra los bugs.",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:47.951915+00:00",
+    "expires_at": "2026-09-17T06:17:47.951915+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:4",
+    "session_id": "default",
+    "kind": "result",
+    "content": {
+      "entity": "bug",
+      "items": [
+        {
+          "id": 4
+        }
+      ],
+      "project_id": null
+    },
+    "created_at": "2026-09-17T05:47:47.953550+00:00",
+    "expires_at": "2026-09-17T06:17:47.953550+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:5",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: action_executed.\nInformación confirmada:\n- El registro bug 4 está confirmado por los datos recuperados.\n- Datos reales de DevControl (registros): 1 registros.\nAcción ejecutada por Laravel:\n- [{'id': 4}]\nResumen de datos:\nLa respuesta se basa en la evidencia recibida.\nLa ejecución se considera realizada únicamente porque Laravel devolvió un resultado exitoso.",
+      "interpretation": {
+        "intent": "query_bug",
+        "entity": "bug",
+        "action": "query",
+        "operation": "list",
+        "filters": {},
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:47.958513+00:00",
+    "expires_at": "2026-09-17T06:17:47.958513+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:6",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Haz push de los cambios.",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:47.982595+00:00",
+    "expires_at": "2026-09-17T06:17:47.982595+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:7",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: unresolved.",
+      "interpretation": {
+        "intent": "unknown_actualizacion",
+        "entity": "actualizacion",
+        "action": "unknown",
+        "operation": "unknown",
+        "filters": {},
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:47.987854+00:00",
+    "expires_at": "2026-09-17T06:17:47.987854+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:8",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Consulta",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:47.996995+00:00",
+    "expires_at": "2026-09-17T06:17:47.996995+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:9",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: missing_information.\nInformación faltante:\n- Se necesitan datos actuales de DevControl para responder.\n- No se recibió evidencia verificable de Laravel para esta consulta.",
+      "interpretation": {
+        "intent": "general",
+        "entity": null,
+        "action": "query",
+        "operation": "list",
+        "filters": {},
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:48.002229+00:00",
+    "expires_at": "2026-09-17T06:17:48.002229+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:10",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "¿Cuántos bugs abiertos existen?",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:48.057819+00:00",
+    "expires_at": "2026-09-17T06:17:48.057819+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:11",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: missing_information.\nInformación faltante:\n- Se necesitan datos actuales de DevControl para responder.\n- No se recibió evidencia verificable de Laravel para esta consulta.",
+      "interpretation": {
+        "intent": "query_bug",
+        "entity": "bug",
+        "action": "query",
+        "operation": "count",
+        "filters": {
+          "status": "Abierto"
+        },
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:48.063815+00:00",
+    "expires_at": "2026-09-17T06:17:48.063815+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:12",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "¿Cuántas tareas pendientes hay?",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:48.420577+00:00",
+    "expires_at": "2026-09-17T06:17:48.420577+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "default:13",
+    "session_id": "default",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: missing_information.\nInformación faltante:\n- Se necesitan datos actuales de DevControl para responder.\n- No se recibió evidencia verificable de Laravel para esta consulta.",
+      "interpretation": {
+        "intent": "query_tarea",
+        "entity": "tarea",
+        "action": "query",
+        "operation": "count",
+        "filters": {
+          "status": "Pendiente"
+        },
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:48.426794+00:00",
+    "expires_at": "2026-09-17T06:17:48.426794+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "e2e-read:7",
+    "session_id": "e2e-read",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "¿Qué bugs abiertos existen?",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:47.933367+00:00",
+    "expires_at": "2026-09-17T06:17:47.933367+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "e2e-read:8",
+    "session_id": "e2e-read",
+    "kind": "result",
+    "content": {
+      "entity": "bug",
+      "items": [
+        {
+          "id": 4,
+          "status": "abierto",
+          "priority": "critica"
+        }
+      ],
+      "project_id": null
+    },
+    "created_at": "2026-09-17T05:47:47.934793+00:00",
+    "expires_at": "2026-09-17T06:17:47.934793+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "e2e-read:3",
+    "session_id": "e2e-read",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: answered.\nInformación confirmada:\n- El registro bug 4 está confirmado por los datos recuperados.\n- bug:4 has_status abierto.\nInferencias:\n- La combinación de prioridad alta/crítica y estado abierto/pendiente sugiere atención prioritaria.\nResumen de datos:\nLa respuesta se basa en la evidencia recibida.",
+      "interpretation": {
+        "intent": "query_bug",
+        "entity": "bug",
+        "action": "query",
+        "operation": "list",
+        "filters": {
+          "status": "Abierto"
+        },
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:47.941533+00:00",
+    "expires_at": "2026-09-17T06:17:47.941533+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "e2e-plan:7",
+    "session_id": "e2e-plan",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Quiero preparar este proyecto para desplegarlo.",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:47.965606+00:00",
+    "expires_at": "2026-09-17T06:17:47.965606+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "e2e-plan:8",
+    "session_id": "e2e-plan",
+    "kind": "result",
+    "content": {
+      "entity": "project",
+      "items": [
+        {
+          "id": 1
+        }
+      ],
+      "project_id": null
+    },
+    "created_at": "2026-09-17T05:47:47.966981+00:00",
+    "expires_at": "2026-09-17T06:17:47.966981+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "e2e-plan:3",
+    "session_id": "e2e-plan",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: plan_proposed.\nInformación confirmada:\n- El registro project 1 está confirmado por los datos recuperados.\nPropuesta o plan:\n- 1. Revisar el proyecto\n- 2. Revisar la configuración\n- 3. Revisar las dependencias\n- 4. Revisar las pruebas\n- 5. Revisar el repositorio\n- 6. Identificar problemas\n- 7. Generar checklist de despliegue\nAcción pendiente:\n- Plan pendiente de revisión: 1. Revisar el proyecto\n- Plan pendiente de revisión: 2. Revisar la configuración\n- Plan pendiente de revisión: 3. Revisar las dependencias\n- Plan pendiente de revisión: 4. Revisar las pruebas\n- Plan pendiente de revisión: 5. Revisar el repositorio\n- Plan pendiente de revisión: 6. Identificar problemas\n- Plan pendiente de revisión: 7. Generar checklist de despliegue\nResumen de datos:\nLa respuesta se basa en la evidencia recibida.",
+      "interpretation": {
+        "intent": "unknown_proyecto",
+        "entity": "proyecto",
+        "action": "unknown",
+        "operation": "unknown",
+        "filters": {},
+        "sort": {},
+        "entities": {
+          "project": "para"
+        },
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:47.973293+00:00",
+    "expires_at": "2026-09-17T06:17:47.973293+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "process-test:4",
+    "session_id": "process-test",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Consulta el proyecto.",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T05:47:48.249810+00:00",
+    "expires_at": "2026-09-17T06:17:48.249810+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "process-test:2",
+    "session_id": "process-test",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: unresolved.",
+      "interpretation": {
+        "intent": "query_proyecto",
+        "entity": "proyecto",
+        "action": "query",
+        "operation": "list",
+        "filters": {},
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T05:47:48.263039+00:00",
+    "expires_at": "2026-09-17T06:17:48.263039+00:00",
+    "source": "conversation"
+  }
+]

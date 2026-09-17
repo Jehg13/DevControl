@@ -13,7 +13,7 @@ class DatasetValidationTests(unittest.TestCase):
     def test_checked_in_datasets_are_valid(self):
         result = validate_dataset_directory(DATASET_DIR)
 
-        self.assertEqual(result["records"], 24)
+        self.assertEqual(result["records"], 30)
         self.assertEqual(result["files"], 2)
 
     def test_missing_fields_are_reported(self):

@@ -3,6 +3,7 @@
 namespace App\Nexus;
 
 use App\Services\NexusExecutionService;
+use App\Services\NexusAiPythonBridge;
 use App\Models\Proyecto;
 use Illuminate\Support\Str;
 
@@ -12,6 +13,7 @@ class NexusRuntime
         private readonly NexusToolRegistry $tools,
         private readonly ?NexusExecutionService $execution = null,
         private readonly ?NexusActionClassifier $actionClassifier = null,
+        private readonly ?NexusAiPythonBridge $pythonBridge = null,
     ) {
     }
 
@@ -20,6 +22,10 @@ class NexusRuntime
         $action = ($this->actionClassifier ?? new NexusActionClassifier())->classify($request);
         if ($action !== null) {
             return $this->handleAction($request, $action);
+        }
+
+        if ($this->pythonBridge !== null && (bool) config('nexus.ai.python.enabled', false)) {
+            return $this->pythonBridge->handle($request);
         }
 
         $intent = $this->classifyIntent($request->message);

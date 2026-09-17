@@ -14,6 +14,7 @@ class ResponseInput:
     reasoning: dict[str, Any] = field(default_factory=dict)
     plan: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    grounding: dict[str, Any] = field(default_factory=dict)
     execution_status: str | None = None
     conversation: list[dict[str, str]] = field(default_factory=list)
 

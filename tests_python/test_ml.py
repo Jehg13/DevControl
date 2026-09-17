@@ -14,8 +14,8 @@ class NexusMlTests(unittest.TestCase):
     def test_training_reports_real_validation_metrics_and_missing_test_split(self):
         report = NexusMlPipeline().train(TRAIN, VALIDATION)
 
-        self.assertEqual(report.train_samples, 18)
-        self.assertEqual(report.validation_samples, 6)
+        self.assertEqual(report.train_samples, 22)
+        self.assertEqual(report.validation_samples, 8)
         self.assertIsNone(report.test_samples)
         self.assertIn("intent", report.metrics)
         self.assertIn("f1_macro", report.metrics["intent"])

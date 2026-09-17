@@ -12,6 +12,7 @@ INTENTS = {
     "consultar_bugs",
     "consultar_incidentes",
     "consultar_actualizaciones",
+    "comparar_proyectos",
     "crear_tarea",
     "crear_bug",
     "crear_incidente",
@@ -30,10 +31,10 @@ INTENTS = {
     "solicitar_aclaracion",
     "ambiguo",
 }
-ENTITIES = {"proyecto", "tarea", "bug", "incidente", "actualizacion", "codigo", "conversacion", "general"}
+ENTITIES = {"proyecto", "tarea", "bug", "incidente", "actualizacion", "usuario", "codigo", "conversacion", "general"}
 ACTIONS = {"query", "create", "update", "delete", "analyze", "follow_up", "clarify", "unknown"}
 ENTITY_FIELDS = {"name", "id", "title", "status", "priority", "project_id", "path", "text"}
-FILTER_FIELDS = {"status", "priority", "project_id", "search"}
+FILTER_FIELDS = {"status", "priority", "project_id", "project_name", "search"}
 
 
 def validate_record_shape(record: dict[str, Any]) -> list[str]:

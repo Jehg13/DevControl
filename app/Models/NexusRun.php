@@ -69,4 +69,9 @@ class NexusRun extends Model
     {
         return $this->hasOne(NexusAutonomousRun::class);
     }
+
+    public function recoveryCheckpoints(): HasMany
+    {
+        return $this->hasMany(NexusRecoveryCheckpoint::class);
+    }
 }

@@ -30,13 +30,14 @@ use App\Nexus\Tools\KnowledgeQueryTool;
 use App\Nexus\Tools\PerformanceReportTool;
 use App\Nexus\Tools\OptimizationProposalsTool;
 use App\Nexus\Tools\IncidentCreateTool;
+use App\Nexus\Tools\IncidentListTool;
+use App\Nexus\Tools\UpdateListTool;
+use App\Nexus\Tools\UserListTool;
 use App\Nexus\Tools\BugCreateTool;
 use App\Nexus\Tools\BugDeleteTool;
 use App\Nexus\Tools\BugListTool;
 use App\Nexus\Tools\BugUpdateTool;
-use App\Nexus\Tools\CodeIntelligenceTool;
 use App\Nexus\Tools\CodeModifyTool;
-use App\Nexus\Tools\CodeValidateTool;
 use App\Nexus\Tools\GitHubIntelligenceTool;
 use App\Nexus\Tools\ObservabilityIntelligenceTool;
 use App\Nexus\Tools\ProjectListTool;
@@ -47,6 +48,8 @@ use App\Nexus\Tools\TaskUpdateTool;
 use App\Services\Models\OpenAICompatibleNexusModel;
 use App\Services\Models\UnavailableNexusModel;
 use App\Services\Models\LocalNexusModel;
+use App\Services\NexusAiPythonBridge;
+use App\Services\NexusAiPythonTransport;
 use App\Services\NexusInferenceEngine;
 use Illuminate\Support\ServiceProvider;
 
@@ -102,13 +105,14 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(TaskUpdateTool::class),
                 $app->make(TaskDeleteTool::class),
                 $app->make(IncidentCreateTool::class),
+                $app->make(IncidentListTool::class),
+                $app->make(UpdateListTool::class),
+                $app->make(UserListTool::class),
                 $app->make(BugListTool::class),
                 $app->make(BugCreateTool::class),
                 $app->make(BugUpdateTool::class),
                 $app->make(BugDeleteTool::class),
-                $app->make(CodeIntelligenceTool::class),
                 $app->make(CodeModifyTool::class),
-                $app->make(CodeValidateTool::class),
                 $app->make(GitHubIntelligenceTool::class),
                 $app->make(ObservabilityIntelligenceTool::class),
             ]);
@@ -120,6 +124,16 @@ class AppServiceProvider extends ServiceProvider
                 $app->bound(\App\Services\NexusExecutionService::class)
                     ? $app->make(\App\Services\NexusExecutionService::class)
                     : null,
+                null,
+                $app->make(NexusAiPythonBridge::class),
+            );
+        });
+
+        $this->app->singleton(NexusAiPythonTransport::class);
+        $this->app->singleton(NexusAiPythonBridge::class, function ($app): NexusAiPythonBridge {
+            return new NexusAiPythonBridge(
+                $app->make(NexusAiPythonTransport::class),
+                $app->make(NexusToolRegistry::class),
             );
         });
     }

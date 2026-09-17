@@ -7,6 +7,7 @@ use App\Nexus\NexusToolRegistry;
 use App\Services\NexusReasoningService;
 use App\Services\NexusExecutionService;
 use App\Services\NexusMemoryService;
+use App\Services\NexusEngineeringRecoveryService;
 use App\Services\NexusProjectUnderstandingService;
 use App\Services\NexusPlannerService;
 use App\Services\NexusAutonomousExecutionService;
@@ -207,6 +208,28 @@ class NexusController extends Controller
     public function run(NexusRun $run)
     {
         return response()->json(['run' => $run->load(['toolCalls', 'plan'])]);
+    }
+
+    public function rollback(
+        Request $request,
+        NexusRun $run,
+        NexusEngineeringRecoveryService $recovery,
+    ) {
+        $data = $request->validate([
+            'confirmed' => ['required', 'boolean'],
+        ]);
+
+        $result = $recovery->rollbackExplicitly(
+            $run,
+            $request->user(),
+            $request->session()->getId(),
+            (bool) $data['confirmed'],
+        );
+
+        return response()->json(
+            $result,
+            in_array($result['status'] ?? null, ['rejected', 'rollback_failed'], true) ? 422 : 200
+        );
     }
 
     public function memories(Request $request)

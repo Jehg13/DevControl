@@ -11,10 +11,32 @@ class ContextManager:
         self.resolver = resolver or ContextResolver()
 
     def remember_turn(self, session_id: str, role: str, content: str, interpretation: dict | None = None) -> None:
-        self.store.add(session_id, "turn", {"role": role, "text": content, "interpretation": interpretation or {}})
+        safe_interpretation = {}
+        if interpretation:
+            for key in (
+                "intent", "entity", "action", "operation", "filters", "sort",
+                "entities", "related_entities",
+            ):
+                if key in interpretation:
+                    safe_interpretation[key] = interpretation[key]
+        self.store.add(session_id, "turn", {"role": role, "text": content, "interpretation": safe_interpretation})
 
     def remember_result(self, session_id: str, entity: str, items: list[dict], project_id: str | None = None) -> None:
-        self.store.add(session_id, "result", {"entity": entity, "items": items, "project_id": project_id})
+        compact = []
+        for item in items[:20]:
+            if not isinstance(item, dict):
+                continue
+            compact.append({
+                key: item[key] for key in (
+                    "id", "nombre", "name", "titulo", "title", "status", "estado",
+                    "priority", "prioridad", "project_id", "proyecto_id",
+                ) if key in item
+            })
+        self.store.add(session_id, "result", {
+            "entity": entity,
+            "items": compact,
+            "project_id": project_id,
+        })
 
     def snapshot(self, session_id: str, message: str, entity: str | None = None) -> ContextSnapshot:
         records = self.store.recent(session_id)

@@ -1,33 +1,41 @@
-"""Application facade. It intentionally performs no model or tool execution."""
+"""Application facade for the execution-free Nexus intelligence pipeline."""
+
+import os
+from pathlib import Path
 
 from .contracts import Interpretation, NexusAiRequest, NexusAiResponse
 from nexus_ai.tools import NexusLaravelToolBridge, ToolProposal
 from nexus_ai.knowledge import KnowledgeGraph
-from nexus_ai.memory import ContextManager
+from nexus_ai.memory import ContextManager, ConversationMemoryStore
 from nexus_ai.planning import NexusPlanner, PlanRequest
 from nexus_ai.reasoning import NexusReasoner, ReasoningRequest
 from nexus_ai.responses import NexusResponseGenerator, ResponseInput
+from nexus_ai.grounding import GroundingValidator
+from nexus_ai.semantic import SemanticQueryBuilder
 
 
 class NexusAiApplication:
     """Stable future entry point called by an adapter owned by Laravel."""
 
+    def __init__(self, context_manager: ContextManager | None = None):
+        self.context_manager = context_manager or ContextManager(
+            ConversationMemoryStore(
+                ttl_seconds=int(os.getenv("NEXUS_MEMORY_TTL", "1800")),
+                max_records=int(os.getenv("NEXUS_MEMORY_MAX_RECORDS", "50")),
+                path=os.getenv(
+                    "NEXUS_MEMORY_PATH",
+                    str(Path.cwd() / "storage" / "nexus_ai" / "memory.json"),
+                ),
+            )
+        )
+
     def handle(self, request: NexusAiRequest) -> NexusAiResponse:
-        return NexusAiResponse(
-            interpretation=Interpretation(
-                entities={"message": request.message},
-            ),
-            context_used=request.context.values,
-            response="La fundación de Nexus AI está preparada, pero la inteligencia aún no está implementada.",
-            status="not_implemented",
-            tool_information=[
-                {
-                    "name": tool.name,
-                    "permissions": tool.permissions,
-                    "requires_confirmation": tool.requires_confirmation,
-                }
-                for tool in request.tools
-            ],
+        values = request.context.values
+        return self.process(
+            request,
+            recovered_data=values.get("data", values),
+            execution_results=values.get("tool_results", []),
+            session_id=str(request.metadata.get("session_id", "default")),
         )
 
     def propose_tool(
@@ -62,13 +70,23 @@ class NexusAiApplication:
     ) -> NexusAiResponse:
         """Run the Python intelligence pipeline without executing Laravel tools."""
         data = recovered_data or {}
-        context_manager = ContextManager()
+        context_manager = self.context_manager
         context_manager.remember_turn(session_id, "user", request.message)
+        for entity, records in data.items():
+            if isinstance(records, list):
+                context_manager.remember_result(session_id, entity, records)
         snapshot = context_manager.snapshot(session_id, request.message)
         graph = KnowledgeGraph.from_devcontrol(knowledge_data) if knowledge_data else None
         reasoning = NexusReasoner().analyze(
             ReasoningRequest(request.message, data, snapshot.to_dict()),
             graph,
+        )
+        data_requests = self._data_requests(reasoning.interpretation, request)
+        grounding = GroundingValidator().validate(
+            reasoning.interpretation,
+            reasoning.to_dict(),
+            execution_results or [],
+            recovered_data=data,
         )
         plan_result = NexusPlanner().create_plan(
             PlanRequest(
@@ -88,9 +106,11 @@ class NexusAiApplication:
                 reasoning=reasoning.to_dict(),
                 plan=[step.to_dict() for step in plan_result.steps],
                 tool_results=execution_results or [],
+                grounding=grounding.to_dict(),
                 conversation=[{"role": turn.role, "content": turn.content} for turn in request.conversation],
             )
         )
+        context_manager.remember_turn(session_id, "assistant", rendered.text, reasoning.interpretation)
         return NexusAiResponse(
             interpretation=Interpretation(
                 intent=reasoning.interpretation.get("intent", "unclassified"),
@@ -111,4 +131,15 @@ class NexusAiApplication:
                 for tool in request.tools
             ],
             errors=reasoning.information_needed,
+            data_requests=data_requests,
+            evidence=grounding.evidence,
+            grounding=grounding.to_dict(),
         )
+
+    def _data_requests(self, interpretation: dict, request: NexusAiRequest) -> list[dict]:
+        if request.metadata.get("data_resolved"):
+            return []
+        query = SemanticQueryBuilder().build(interpretation)
+        if query is None:
+            return []
+        return [query.to_dict()]

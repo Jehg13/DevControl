@@ -67,6 +67,7 @@ Route::post('/dashboard/asistente/optimizacion/{proposal}/aprobar', [NexusContro
 Route::post('/dashboard/asistente/autonomo/{autonomousRun}/pausar', [NexusController::class, 'pauseAutonomous'])->name('nexus.autonomous.pause');
 Route::post('/dashboard/asistente/planificar', [NexusController::class, 'plan'])->name('nexus.plan');
 Route::get('/dashboard/asistente/ejecuciones/{run}', [NexusController::class, 'run'])->name('nexus.run');
+Route::post('/dashboard/asistente/ejecuciones/{run}/rollback', [NexusController::class, 'rollback'])->name('nexus.run.rollback');
 Route::get('/dashboard/asistente/memoria', [NexusController::class, 'memories'])->name('nexus.memories');
 Route::get('/dashboard/asistente/analisis', [NexusController::class, 'analyses'])->name('nexus.analyses');
 Route::get('/dashboard/asistente/proyecto/comprension', [NexusController::class, 'projectUnderstanding'])->name('nexus.project.understanding');
