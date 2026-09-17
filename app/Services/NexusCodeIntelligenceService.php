@@ -80,7 +80,7 @@ final class NexusCodeIntelligenceService
         ];
     }
 
-    public function analyze(?int $projectId = null, ?string $relativePath = null, bool $refresh = false, int $maxFiles = 250): array
+    public function analyze(?int $projectId = null, ?string $relativePath = null, bool $refresh = false, int $maxFiles = 250, bool $persist = true): array
     {
         $projectId = $projectId !== null && \App\Models\Proyecto::query()->whereKey($projectId)->exists()
             ? $projectId
@@ -95,12 +95,14 @@ final class NexusCodeIntelligenceService
             $path = str_replace('\\', '/', $file->getRelativePathname());
             $content = File::get($file->getPathname());
             $fingerprint = hash('sha256', $path.':'.$file->getSize().':'.$file->getMTime());
-            $record = NexusCodeFile::query()->where('proyecto_id', $projectId)->where('path', $path)->first();
+            $record = $persist
+                ? NexusCodeFile::query()->where('proyecto_id', $projectId)->where('path', $path)->first()
+                : null;
             if (! $refresh && $record?->fingerprint === $fingerprint && $record->status === 'active') {
                 $analysis = $record->analysis;
                 $unchanged[] = $path;
             } else {
-                if ($record && $record->fingerprint !== $fingerprint) {
+                if ($persist && $record && $record->fingerprint !== $fingerprint) {
                     $this->knowledge->invalidateSource(
                         'code_intelligence',
                         $record->fingerprint,
@@ -114,25 +116,32 @@ final class NexusCodeIntelligenceService
                     'symbols' => $parser?->parse($path, $content) ?? [],
                     'fingerprint' => $fingerprint,
                 ];
-                $record = NexusCodeFile::updateOrCreate(
-                    ['proyecto_id' => $projectId, 'path' => $path],
-                    ['fingerprint' => $fingerprint, 'language' => $analysis['language'], 'analysis' => $analysis, 'status' => 'active', 'invalidated_at' => null]
-                );
+                if ($persist) {
+                    NexusCodeFile::updateOrCreate(
+                        ['proyecto_id' => $projectId, 'path' => $path],
+                        ['fingerprint' => $fingerprint, 'language' => $analysis['language'], 'analysis' => $analysis, 'status' => 'active', 'invalidated_at' => null]
+                    );
+                }
                 $changed[] = $path;
             }
             $nodes[] = $analysis;
         }
 
-        $deleted = NexusCodeFile::query()
-            ->where('proyecto_id', $projectId)
-            ->whereNotIn('path', array_keys(array_flip(array_map(fn (array $node): string => $node['path'], $nodes))))
-            ->where('status', 'active')
-            ->get();
-        foreach ($deleted as $record) {
-            $record->update(['status' => 'invalidated', 'invalidated_at' => now()]);
+        $deleted = collect();
+        if ($persist) {
+            $deleted = NexusCodeFile::query()
+                ->where('proyecto_id', $projectId)
+                ->whereNotIn('path', array_keys(array_flip(array_map(fn (array $node): string => $node['path'], $nodes))))
+                ->where('status', 'active')
+                ->get();
+            foreach ($deleted as $record) {
+                $record->update(['status' => 'invalidated', 'invalidated_at' => now()]);
+            }
         }
 
-        $this->index($nodes, $projectId);
+        if ($persist) {
+            $this->index($nodes, $projectId);
+        }
         return [
             'project_id' => $projectId,
             'analyzed_path' => $relativePath ?: '.',

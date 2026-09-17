@@ -20,7 +20,7 @@ final class NexusDeveloperIntelligenceOrchestrator
     public function analyze(?int $projectId = null, ?string $relativePath = null): array
     {
         $repo = $this->repository->analyze($relativePath);
-        $code = $this->code->analyze($projectId, $relativePath, false, 150);
+        $code = $this->code->analyze($projectId, $relativePath, false, 150, false);
         $commit = $this->commits->recent($projectId, 10);
         $deps = $this->dependencies->analyze($relativePath);
         $tests = $this->tests->analyze($relativePath);
