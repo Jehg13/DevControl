@@ -38,6 +38,52 @@ class NexusMemoryService
         return $message;
     }
 
+    /**
+     * Promotes explicit technical statements from a conversation to candidate
+     * engineering memory. Assistant prose is never treated as evidence.
+     *
+     * @return array<int, NexusMemory>
+     */
+    public function promoteInteraction(
+        NexusConversation $conversation,
+        string $userMessage,
+        ?string $assistantMessage = null,
+        array $context = [],
+    ): array {
+        if ($conversation->usuario_id === null) {
+            return [];
+        }
+
+        $projectId = $context['project_id'] ?? $context['proyecto_id'] ?? null;
+        $patterns = [
+            'problem' => '/\b(?:problema encontrado|el problema es|falló|falla)\s*:?\s*(.{10,400})$/iu',
+            'solution' => '/\b(?:solución|se resolvió|resuelto|la solución es)\s*:?\s*(.{10,400})$/iu',
+            'decision' => '/\b(?:decidimos|decidí|hemos decidido|la decisión es)\s+(.{10,400})$/iu',
+            'experience' => '/\b(?:aprendimos|experiencia|descubrimos que)\s*:?\s*(.{10,400})$/iu',
+            'knowledge' => '/\b(?:es importante|ten presente|conocimiento importante)\s*:?\s*(.{10,400})$/iu',
+        ];
+        $memories = [];
+
+        foreach ($patterns as $category => $pattern) {
+            if (! preg_match($pattern, trim($userMessage), $matches)) {
+                continue;
+            }
+
+            $memories[] = $this->recordEngineeringExperience([
+                'key' => $category.':'.$this->memoryKey($matches[1]),
+                'content' => trim($matches[1]),
+                'type' => 'experience',
+                'source' => 'interaction',
+                'confidence' => 80,
+                'importance' => 70,
+                'metadata' => ['interaction_type' => $category],
+                'evidence' => [],
+            ], $conversation->usuario_id, $projectId, $conversation->session_key);
+        }
+
+        return $memories;
+    }
+
     public function relevantContext(
         NexusConversation $conversation,
         string $query,

@@ -374,5 +374,40 @@
     "created_at": "2026-09-17T05:47:48.263039+00:00",
     "expires_at": "2026-09-17T06:17:48.263039+00:00",
     "source": "conversation"
+  },
+  {
+    "record_id": "debug:1",
+    "session_id": "debug",
+    "kind": "turn",
+    "content": {
+      "role": "user",
+      "text": "Que eres?",
+      "interpretation": {}
+    },
+    "created_at": "2026-09-17T06:05:26.685832+00:00",
+    "expires_at": "2026-09-17T06:35:26.685832+00:00",
+    "source": "conversation"
+  },
+  {
+    "record_id": "debug:2",
+    "session_id": "debug",
+    "kind": "turn",
+    "content": {
+      "role": "assistant",
+      "text": "Estado: missing_information.\nInformación faltante:\n- Se necesitan datos actuales de DevControl para responder.\n- No se recibió evidencia verificable de Laravel para esta consulta.",
+      "interpretation": {
+        "intent": "general",
+        "entity": null,
+        "action": "query",
+        "operation": "list",
+        "filters": {},
+        "sort": {},
+        "entities": {},
+        "related_entities": {}
+      }
+    },
+    "created_at": "2026-09-17T06:05:26.694857+00:00",
+    "expires_at": "2026-09-17T06:35:26.694857+00:00",
+    "source": "conversation"
   }
 ]
