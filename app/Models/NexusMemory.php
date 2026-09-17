@@ -16,14 +16,23 @@ class NexusMemory extends Model
         'memory_key',
         'content',
         'source',
+        'memory_type',
         'importance',
+        'confidence',
         'metadata',
+        'evidence',
+        'relationships',
         'last_used_at',
+        'expires_at',
+        'access_scope',
     ];
 
     protected $casts = [
         'metadata' => 'array',
+        'evidence' => 'array',
+        'relationships' => 'array',
         'last_used_at' => 'datetime',
+        'expires_at' => 'datetime',
     ];
 
     public function usuario(): BelongsTo

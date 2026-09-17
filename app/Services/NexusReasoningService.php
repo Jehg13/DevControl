@@ -15,10 +15,14 @@ use Throwable;
 
 class NexusReasoningService
 {
+    private readonly NexusCognitiveSecurityBoundary $boundary;
+
     public function __construct(
         private readonly NexusModel $model,
         private readonly NexusToolRegistry $tools,
+        ?NexusCognitiveSecurityBoundary $boundary = null,
     ) {
+        $this->boundary = $boundary ?? new NexusCognitiveSecurityBoundary($tools);
     }
 
     public function reason(
@@ -82,6 +86,11 @@ class NexusReasoningService
             }
 
             $requiresConfirmation = $requiresConfirmation || $tool->requiresConfirmation();
+        }
+
+        $boundaryErrors = $this->boundary->validateModelToolCalls($response->toolCalls, false);
+        if ($boundaryErrors !== []) {
+            throw new NexusModelException(implode('; ', $boundaryErrors), 'cognitive_boundary_violation');
         }
 
         return new NexusModelResponse(

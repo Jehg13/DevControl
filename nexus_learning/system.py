@@ -58,6 +58,10 @@ class Experience:
     created_at: str = field(default_factory=_now)
     outcome_evaluation: OutcomeEvaluation | None = None
     validation: ValidationResult | None = None
+    tests: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    decisions: list[str] = field(default_factory=list)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -99,6 +103,8 @@ class DatasetVersion:
     approved_at: str | None = None
     approved_by: str | None = None
     rejection_reason: str | None = None
+    metrics: dict[str, float] = field(default_factory=dict)
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -227,6 +233,10 @@ class ContinuousLearningSystem:
         project_id: str | None = None,
         session_id: str | None = None,
         source: str = "nexus",
+        tests: Iterable[str] = (),
+        errors: Iterable[str] = (),
+        decisions: Iterable[str] = (),
+        relationships: Iterable[dict[str, Any]] = (),
         metadata: dict[str, Any] | None = None,
     ) -> Experience:
         if not problem.strip() or not solution.strip():
@@ -243,6 +253,10 @@ class ContinuousLearningSystem:
             project_id=project_id,
             session_id=session_id,
             source=source,
+            tests=[item.strip() for item in tests if item.strip()],
+            errors=[item.strip() for item in errors if item.strip()],
+            decisions=[item.strip() for item in decisions if item.strip()],
+            relationships=[dict(item) for item in relationships],
             metadata=metadata or {},
         )
 
@@ -385,6 +399,14 @@ class ContinuousLearningSystem:
         ]
         if len(selected) < self.quality_gates.min_dataset_examples:
             raise ValueError("quality gate rejected dataset: not enough validated experiences")
+        integrity = self.detect_data_integrity(selected)
+        if integrity["contaminated"] or integrity["duplicates"] or integrity["contradictions"]:
+            raise ValueError(
+                "quality gate rejected dataset: "
+                f"contaminated={len(integrity['contaminated'])}, "
+                f"duplicates={len(integrity['duplicates'])}, "
+                f"contradictions={len(integrity['contradictions'])}"
+            )
         version = version or f"experience-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
         output_path = Path(output)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -419,7 +441,21 @@ class ContinuousLearningSystem:
             content = "".join(json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n" for row in rows)
             Path(dataset_path).write_text(content, encoding="utf-8")
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        dataset = DatasetVersion(version, [row["id"] for row in rows], digest, dataset_path)
+        dataset = DatasetVersion(
+            version,
+            [row["id"] for row in rows],
+            digest,
+            dataset_path,
+            metrics={
+                "examples": float(len(rows)),
+                "mean_quality": sum(row["quality"] for row in rows) / max(len(rows), 1),
+            },
+            provenance={
+                "source": "validated_experiences",
+                "experience_ids": [row["id"] for row in rows],
+                "integrity": integrity,
+            },
+        )
 
         def save(state: dict[str, Any]) -> DatasetVersion:
             if version in state["datasets"]:
@@ -429,6 +465,52 @@ class ContinuousLearningSystem:
             return dataset
 
         return self.store.update(save)
+
+    def detect_data_integrity(self, experiences: Iterable[Experience] | None = None) -> dict[str, Any]:
+        """Detects unsafe records before they can enter a versioned dataset."""
+        values = list(experiences if experiences is not None else self.list_experiences(status="validated"))
+        duplicates: list[list[str]] = []
+        by_digest: dict[str, list[str]] = {}
+        by_problem: dict[str, list[Experience]] = {}
+        contaminated: list[dict[str, Any]] = []
+        for experience in values:
+            digest = hashlib.sha256(
+                f"{experience.problem.strip().casefold()}\n{experience.solution.strip().casefold()}".encode("utf-8")
+            ).hexdigest()
+            by_digest.setdefault(digest, []).append(experience.experience_id)
+            problem_key = " ".join(experience.problem.casefold().split())
+            by_problem.setdefault(problem_key, []).append(experience)
+            corpus = " ".join([
+                experience.problem,
+                experience.solution,
+                experience.context,
+                experience.outcome,
+                *experience.errors,
+                *experience.tests,
+            ])
+            if re.search(r"-----BEGIN .*PRIVATE KEY-----|api[_-]?key\s*[:=]|password\s*[:=]|gh[pousr]_", corpus, re.I):
+                contaminated.append({"experience_id": experience.experience_id, "reason": "secret_or_credential"})
+            if experience.source not in {"nexus", "reviewed", "engineering"}:
+                contaminated.append({"experience_id": experience.experience_id, "reason": "untrusted_source"})
+            if not experience.validation or not experience.outcome_evaluation:
+                contaminated.append({"experience_id": experience.experience_id, "reason": "missing_validation"})
+        duplicates = [ids for ids in by_digest.values() if len(ids) > 1]
+        contradictions = []
+        for problem, records in by_problem.items():
+            solutions = {record.solution.casefold().strip() for record in records}
+            if len(solutions) > 1:
+                contradictions.append({
+                    "problem": problem,
+                    "experience_ids": [record.experience_id for record in records],
+                    "solutions": sorted(solutions),
+                })
+        return {
+            "contaminated": contaminated,
+            "duplicates": duplicates,
+            "contradictions": contradictions,
+            "checked": len(values),
+            "safe": not contaminated and not duplicates and not contradictions,
+        }
 
     def approve_dataset(self, version: str, *, approved_by: str = "operator") -> DatasetVersion:
         def update(state: dict[str, Any]) -> DatasetVersion:
@@ -545,44 +627,19 @@ class ContinuousLearningSystem:
         return self.store.update(save)
 
     def approve_model(self, version: str, *, approved_by: str = "operator") -> ModelVersion:
-        def update(state: dict[str, Any]) -> ModelVersion:
-            try:
-                value = state["models"][version]
-            except KeyError as error:
-                raise KeyError(f"unknown model version: {version}") from error
-            evaluation = value["metrics"].get("evaluation_score", value["metrics"].get("eval_score", 0.0))
-            regression = value["metrics"].get("regression_rate", 0.0)
-            if evaluation < self.quality_gates.min_evaluation_score:
-                raise ValueError("quality gate rejected model: evaluation score is too low")
-            if regression > self.quality_gates.max_regression_rate:
-                raise ValueError("quality gate rejected model: regression rate is too high")
-            previous = state.get("active_model")
-            value.update(status="approved", approved_at=_now(), approved_by=approved_by)
-            state["active_model"] = version
-            if previous and previous != version and previous in state["models"]:
-                state["models"][previous]["status"] = "superseded"
-            state["events"].append({"event": "model_approved", "version": version, "by": approved_by, "at": _now()})
-            return ModelVersion(**value)
+        raise PermissionError(
+            "Python cannot approve or activate models; Laravel/Core must authorize promotion."
+        )
 
-        return self.store.update(update)
+    def promote_model(self, version: str, *, promoted_by: str = "operator") -> ModelVersion:
+        raise PermissionError(
+            "Python cannot promote or activate models; Laravel/Core must authorize promotion."
+        )
 
     def rollback(self, version: str) -> ModelVersion:
-        def update(state: dict[str, Any]) -> ModelVersion:
-            try:
-                target = state["models"][version]
-            except KeyError as error:
-                raise KeyError(f"unknown model version: {version}") from error
-            if target["status"] not in {"approved", "superseded"}:
-                raise ValueError("only an approved model can be restored")
-            active = state.get("active_model")
-            if active and active in state["models"]:
-                state["models"][active]["status"] = "rolled_back"
-            target["status"] = "approved"
-            state["active_model"] = version
-            state["events"].append({"event": "model_rollback", "version": version, "at": _now()})
-            return ModelVersion(**target)
-
-        return self.store.update(update)
+        raise PermissionError(
+            "Python cannot rollback active models; Laravel/Core must authorize rollback."
+        )
 
     def active_model(self) -> ModelVersion | None:
         state = self.store.read()

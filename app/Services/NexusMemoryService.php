@@ -7,6 +7,8 @@ use App\Models\NexusMemory;
 use App\Models\NexusMessage;
 class NexusMemoryService
 {
+    private const ENGINEERING_TYPES = ['fact', 'experience', 'inference', 'validated_knowledge'];
+
     public function conversation(string $sessionKey, ?int $userId = null): NexusConversation
     {
         return NexusConversation::query()->firstOrCreate(
@@ -68,6 +70,9 @@ class NexusMemoryService
             ->values();
 
         $memories = NexusMemory::query()
+            ->where(function ($query): void {
+                $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
+            })
             ->where(function ($query) use ($conversation): void {
                 $query->where('nexus_conversation_id', $conversation->id)
                     ->orWhere(function ($query) use ($conversation): void {
@@ -80,6 +85,7 @@ class NexusMemoryService
                     $query->whereNull('proyecto_id')->orWhere('proyecto_id', $projectId);
                 });
             })
+            ->when($projectId === null, fn ($query) => $query->whereNull('proyecto_id'))
             ->get()
             ->map(fn (NexusMemory $memory) => [
                 'memory' => $memory,
@@ -109,14 +115,159 @@ class NexusMemoryService
             'persistent_memories' => $memories->map(fn (NexusMemory $memory) => [
                 'key' => $memory->memory_key,
                 'content' => $memory->content,
+                'type' => $memory->memory_type ?? 'experience',
                 'importance' => $memory->importance,
+                'confidence' => $memory->confidence ?? 50,
+                'evidence' => $memory->evidence ?? [],
+                'relationships' => $memory->relationships ?? [],
             ])->all(),
         ];
     }
 
+    /**
+     * Stores a validated technical experience without making it authoritative.
+     *
+     * @param array<string, mixed> $experience
+     */
+    public function recordEngineeringExperience(
+        array $experience,
+        ?int $userId,
+        ?int $projectId = null,
+        ?string $sessionKey = null,
+    ): NexusMemory {
+        if ($userId === null) {
+            throw new \InvalidArgumentException('La memoria técnica requiere un usuario autenticado.');
+        }
+        $type = (string) ($experience['type'] ?? 'experience');
+        if (! in_array($type, self::ENGINEERING_TYPES, true)) {
+            throw new \InvalidArgumentException('El tipo de memoria técnica no es válido.');
+        }
+        if ($type === 'fact' && empty($experience['evidence'])) {
+            throw new \InvalidArgumentException('Un hecho técnico requiere evidencia.');
+        }
+        if ($type === 'validated_knowledge' && ((int) ($experience['confidence'] ?? 0)) < 70) {
+            throw new \InvalidArgumentException('El conocimiento validado requiere confianza mínima de 70.');
+        }
+        if (! is_string($experience['content'] ?? null) || trim($experience['content']) === '') {
+            throw new \InvalidArgumentException('La memoria técnica requiere contenido.');
+        }
+
+        $conversation = $sessionKey !== null ? $this->conversation($sessionKey, $userId) : null;
+        $content = trim(mb_substr($experience['content'], 0, 10000));
+        $key = trim(mb_substr(
+            (string) ($experience['key'] ?? $this->memoryKey($content)),
+            0,
+            120
+        ));
+        $attributes = [
+            'nexus_conversation_id' => $conversation?->id,
+            'content' => $content,
+            'source' => (string) ($experience['source'] ?? 'engineering'),
+            'memory_type' => $type,
+            'importance' => max(0, min(100, (int) ($experience['importance'] ?? 60))),
+            'confidence' => max(0, min(100, (int) ($experience['confidence'] ?? 60))),
+            'metadata' => $experience['metadata'] ?? [],
+            'evidence' => array_values($experience['evidence'] ?? []),
+            'relationships' => array_values($experience['relationships'] ?? []),
+            'expires_at' => $experience['expires_at']
+                ?? (in_array($type, ['experience', 'inference'], true)
+                    ? now()->addDays((int) config('nexus.memory.engineering_memory_ttl_days', 180))
+                    : null),
+            'access_scope' => $projectId !== null ? 'project' : 'user',
+            'last_used_at' => null,
+        ];
+
+        $memory = NexusMemory::query()
+            ->where('usuario_id', $userId)
+            ->where('proyecto_id', $projectId)
+            ->where('memory_type', $type)
+            ->where('memory_key', $key)
+            ->first();
+
+        if ($memory === null) {
+            return NexusMemory::create($attributes + [
+                'usuario_id' => $userId,
+                'proyecto_id' => $projectId,
+                'memory_key' => $key,
+            ]);
+        }
+
+        if ($this->isStale($memory, $attributes)) {
+            return $memory;
+        }
+
+        $memory->update($attributes);
+        return $memory->refresh();
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function retrieveEngineeringMemory(
+        string $query,
+        ?int $userId,
+        ?int $projectId = null,
+        int $limit = 8,
+    ): array {
+        $tokens = $this->tokens($query);
+        if ($tokens === []) {
+            return [];
+        }
+
+        $memories = NexusMemory::query()
+            ->where('usuario_id', $userId)
+            ->whereIn('memory_type', self::ENGINEERING_TYPES)
+            ->where(function ($builder) use ($projectId): void {
+                if ($projectId === null) {
+                    $builder->whereNull('proyecto_id');
+                } else {
+                    $builder->where('proyecto_id', $projectId);
+                }
+            })
+            ->where(function ($query): void {
+                $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
+            })
+            ->get()
+            ->map(fn (NexusMemory $memory): array => [
+                'memory' => $memory,
+                'score' => $this->semanticScore($memory, $tokens),
+            ])
+            ->filter(fn (array $item): bool => $item['score'] > 0)
+            ->sortByDesc('score')
+            ->take(max(1, min($limit, (int) config('nexus.memory.engineering_memory_limit', 50))));
+
+        $selected = $memories->pluck('memory')->values();
+        if ($selected->isNotEmpty()) {
+            NexusMemory::whereKey($selected->pluck('id'))->update(['last_used_at' => now()]);
+        }
+
+        return $memories->map(fn (array $item): array => [
+            'id' => $item['memory']->id,
+            'key' => $item['memory']->memory_key,
+            'content' => $item['memory']->content,
+            'type' => $item['memory']->memory_type,
+            'score' => round($item['score'], 4),
+            'confidence' => $item['memory']->confidence,
+            'evidence' => $item['memory']->evidence ?? [],
+            'relationships' => $item['memory']->relationships ?? [],
+            'project_id' => $item['memory']->proyecto_id,
+        ])->values()->all();
+    }
+
+    public function purgeExpiredEngineeringMemory(?int $userId = null, ?int $projectId = null): int
+    {
+        return NexusMemory::query()
+            ->whereIn('memory_type', self::ENGINEERING_TYPES)
+            ->whereNotNull('expires_at')
+            ->where('expires_at', '<=', now())
+            ->when($userId !== null, fn ($query) => $query->where('usuario_id', $userId))
+            ->when($projectId !== null, fn ($query) => $query->where('proyecto_id', $projectId))
+            ->delete();
+    }
+
     public function forget(NexusMemory $memory, ?int $userId): void
     {
-        if ($memory->usuario_id !== $userId) {
+        if ($userId === null || $memory->usuario_id !== $userId) {
             abort(403, 'No tienes permiso para eliminar este recuerdo.');
         }
 
@@ -148,8 +299,34 @@ class NexusMemoryService
                 'content' => $memory,
                 'source' => 'explicit_user',
                 'importance' => 90,
+                'memory_type' => 'experience',
+                'confidence' => 70,
+                'access_scope' => 'user',
             ]
         );
+    }
+
+    private function memoryKey(string $content): string
+    {
+        return mb_substr(preg_replace('/\s+/u', ' ', mb_strtolower($content, 'UTF-8')) ?: $content, 0, 120);
+    }
+
+    private function isStale(NexusMemory $memory, array $attributes): bool
+    {
+        $incomingConfidence = (int) ($attributes['confidence'] ?? 0);
+        return $memory->memory_type === 'fact'
+            && (int) $memory->confidence > $incomingConfidence
+            && count($attributes['evidence'] ?? []) < count($memory->evidence ?? []);
+    }
+
+    private function semanticScore(NexusMemory $memory, array $tokens): float
+    {
+        $candidate = $this->tokens($memory->content.' '.$memory->memory_key);
+        $overlap = count(array_intersect($candidate, $tokens));
+        $importance = ((int) $memory->importance) / 100;
+        $confidence = ((int) ($memory->confidence ?? 50)) / 100;
+        $recency = $memory->last_used_at?->diffInDays(now()) ?? 30;
+        return $overlap + $importance * 0.25 + $confidence * 0.25 + (1 / (1 + $recency)) * 0.1;
     }
 
     private function tokens(string $value): array

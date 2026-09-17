@@ -54,7 +54,15 @@ final class NexusToolRegistry
     public function execute(string $name, array $parameters = [], ?NexusToolContext $context = null): NexusToolResult
     {
         try {
-            return $this->get($name)->execute($parameters, $context ?? new NexusToolContext());
+            $resolvedContext = $context ?? new NexusToolContext();
+            if ($resolvedContext->system && ! $resolvedContext->isTrustedSystem()) {
+                return NexusToolResult::failure(
+                    'untrusted_system_context',
+                    'El contexto de sistema no tiene un origen Core confiable.'
+                );
+            }
+
+            return $this->get($name)->execute($parameters, $resolvedContext);
         } catch (NexusToolException $exception) {
             return NexusToolResult::failure(
                 $exception->errorCode,

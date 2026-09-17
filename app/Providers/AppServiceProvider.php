@@ -14,6 +14,11 @@ use App\Nexus\Tools\BugCreateTool;
 use App\Nexus\Tools\BugDeleteTool;
 use App\Nexus\Tools\BugListTool;
 use App\Nexus\Tools\BugUpdateTool;
+use App\Nexus\Tools\CodeIntelligenceTool;
+use App\Nexus\Tools\CodeModifyTool;
+use App\Nexus\Tools\CodeValidateTool;
+use App\Nexus\Tools\GitHubIntelligenceTool;
+use App\Nexus\Tools\ObservabilityIntelligenceTool;
 use App\Nexus\Tools\ProjectListTool;
 use App\Nexus\Tools\TaskCreateTool;
 use App\Nexus\Tools\TaskDeleteTool;
@@ -55,6 +60,11 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(BugCreateTool::class),
                 $app->make(BugUpdateTool::class),
                 $app->make(BugDeleteTool::class),
+                $app->make(CodeIntelligenceTool::class),
+                $app->make(CodeModifyTool::class),
+                $app->make(CodeValidateTool::class),
+                $app->make(GitHubIntelligenceTool::class),
+                $app->make(ObservabilityIntelligenceTool::class),
             ]);
         });
     }

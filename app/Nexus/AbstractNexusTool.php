@@ -55,7 +55,7 @@ abstract class AbstractNexusTool implements NexusTool
             return;
         }
 
-        if ($context->system) {
+        if ($context->isTrustedSystem()) {
             return;
         }
 

@@ -16,6 +16,8 @@ return [
         'message_candidates' => (int) env('NEXUS_MEMORY_MESSAGE_CANDIDATES', 80),
         'relevant_messages' => (int) env('NEXUS_MEMORY_RELEVANT_MESSAGES', 6),
         'relevant_memories' => (int) env('NEXUS_MEMORY_RELEVANT_MEMORIES', 8),
+        'engineering_memory_limit' => (int) env('NEXUS_ENGINEERING_MEMORY_LIMIT', 50),
+        'engineering_memory_ttl_days' => (int) env('NEXUS_ENGINEERING_MEMORY_TTL_DAYS', 180),
     ],
     'modules' => [
         'proyectos' => ['label' => 'Proyectos', 'route' => 'proyectos.index'],
