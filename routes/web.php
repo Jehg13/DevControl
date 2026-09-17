@@ -58,6 +58,8 @@ Route::get('/dashboard/asistente/herramientas', [NexusController::class, 'defini
 Route::post('/dashboard/asistente/razonar', [NexusController::class, 'reason'])->name('nexus.reason');
 Route::post('/dashboard/asistente/ejecutar', [NexusController::class, 'execute'])->name('nexus.execute');
 Route::post('/dashboard/asistente/autonomo', [NexusController::class, 'autonomous'])->name('nexus.autonomous');
+Route::post('/dashboard/asistente/ciclo-controlado', [NexusController::class, 'controlledCycle'])->name('nexus.controlled-cycle');
+Route::post('/dashboard/asistente/ciclo-controlado/{autonomousRun}/reanudar', [NexusController::class, 'resumeControlledCycle'])->name('nexus.controlled-cycle.resume');
 Route::get('/dashboard/asistente/autonomo/{autonomousRun}', [NexusController::class, 'autonomousRun'])->name('nexus.autonomous.run');
 Route::post('/dashboard/asistente/autonomo/{autonomousRun}/reanudar', [NexusController::class, 'resumeAutonomous'])->name('nexus.autonomous.resume');
 Route::get('/dashboard/asistente/infraestructura', [NexusController::class, 'infrastructure'])->name('nexus.infrastructure');

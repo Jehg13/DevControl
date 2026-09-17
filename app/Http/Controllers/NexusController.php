@@ -11,6 +11,7 @@ use App\Services\NexusEngineeringRecoveryService;
 use App\Services\NexusProjectUnderstandingService;
 use App\Services\NexusPlannerService;
 use App\Services\NexusAutonomousExecutionService;
+use App\Services\NexusControlledEngineeringCycleService;
 use App\Models\NexusAutonomousRun;
 use App\Services\NexusInfrastructureService;
 use App\Services\NexusExperienceService;
@@ -22,6 +23,49 @@ use Throwable;
 
 class NexusController extends Controller
 {
+    public function controlledCycle(Request $request, NexusControlledEngineeringCycleService $cycle)
+    {
+        $data = $request->validate([
+            'objective' => ['required', 'string', 'max:20000'],
+            'context' => ['nullable', 'array'],
+            'limits' => ['nullable', 'array'],
+        ]);
+
+        return response()->json([
+            'autonomous_run' => $cycle->start(
+                $data['objective'],
+                $data['context'] ?? [],
+                $request->user()?->id,
+                $data['limits'] ?? [],
+            ),
+        ], 202);
+    }
+
+    public function resumeControlledCycle(
+        Request $request,
+        NexusAutonomousRun $autonomousRun,
+        NexusControlledEngineeringCycleService $cycle
+    ) {
+        abort_unless(
+            $request->user()
+            && (int) $autonomousRun->usuario_id === (int) $request->user()->id,
+            403
+        );
+        $data = $request->validate([
+            'approved' => ['required', 'boolean'],
+            'permissions' => ['nullable', 'array'],
+        ]);
+
+        return response()->json([
+            'autonomous_run' => $cycle->resume(
+                $autonomousRun,
+                $request->user()?->id,
+                (bool) $data['approved'],
+                $data['permissions'] ?? [],
+            ),
+        ]);
+    }
+
     public function definitions(NexusToolRegistry $tools)
     {
         return response()->json(['herramientas' => $tools->definitions()]);
